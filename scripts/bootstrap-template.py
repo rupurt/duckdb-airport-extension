@@ -51,7 +51,7 @@ def replace_everywhere(to_find, to_replace):
         replace(path, to_find, to_replace)
         replace(path, to_find.capitalize(), to_camel_case(to_replace))
         replace(path, to_find.upper(), to_replace.upper())
-    
+
     replace("./CMakeLists.txt", to_find, to_replace)
     replace("./Makefile", to_find, to_replace)
     replace("./Makefile", to_find.capitalize(), to_camel_case(to_replace))
@@ -59,12 +59,12 @@ def replace_everywhere(to_find, to_replace):
     replace("./README.md", to_find, to_replace)
     replace("./extension_config.cmake", to_find, to_replace)
 
-replace_everywhere("quack", name_extension)
-replace_everywhere("Quack", name_extension.capitalize())
+replace_everywhere("arrow_flight", name_extension)
+replace_everywhere("arrow_flight", name_extension.capitalize())
 replace_everywhere("<extension_name>", name_extension)
 
 string_to_replace = name_extension
-string_to_find = "quack"
+string_to_find = "arrow_flight"
 
 # rename files
 os.rename(f'test/sql/{string_to_find}.test', f'test/sql/{string_to_replace}.test')

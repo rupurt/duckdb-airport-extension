@@ -1,23 +1,23 @@
-# name: test/sql/quack.test
-# description: test quack extension
-# group: [quack]
+# name: test/sql/arrow_flight.test
+# description: test arrow_flight extension
+# group: [arrow_flight]
 
 # Before we load the extension, this will fail
 statement error
-SELECT quack('Sam');
+SELECT arrow_flight('Sam');
 ----
-Catalog Error: Scalar Function with name quack does not exist!
+Catalog Error: Scalar Function with name arrow_flight does not exist!
 
 # Require statement will ensure this test is run with this extension loaded
-require quack
+require arrow_flight
 
 # Confirm the extension works
 query I
-SELECT quack('Sam');
+SELECT arrow_flight('Sam');
 ----
-Quack Sam 🐥
+arrow_flight Sam 🐥
 
 query I
-SELECT quack_openssl_version('Michael');
+SELECT arrow_flight_openssl_version('Michael');
 ----
-<REGEX>:Quack Michael, my linked OpenSSL version is OpenSSL.*
+<REGEX>:arrow_flight Michael, my linked OpenSSL version is OpenSSL.*
