@@ -1,23 +1,23 @@
-# name: test/sql/arrow_flight.test
-# description: test arrow_flight extension
-# group: [arrow_flight]
+# name: test/sql/airport.test
+# description: test airport extension
+# group: [airport]
 
 # Before we load the extension, this will fail
 statement error
-SELECT arrow_flight('Sam');
+SELECT airport('Sam');
 ----
-Catalog Error: Scalar Function with name arrow_flight does not exist!
+Catalog Error: Scalar Function with name airport does not exist!
 
 # Require statement will ensure this test is run with this extension loaded
-require arrow_flight
+require airport
 
 # Confirm the extension works
 query I
-SELECT arrow_flight('Sam');
+SELECT airport('Sam');
 ----
-arrow_flight Sam 🐥
+airport Sam 🐥
 
 query I
-SELECT arrow_flight_openssl_version('Michael');
+SELECT airport_openssl_version('Michael');
 ----
-<REGEX>:arrow_flight Michael, my linked OpenSSL version is OpenSSL.*
+<REGEX>:airport Michael, my linked OpenSSL version is OpenSSL.*

@@ -1,7 +1,7 @@
 PROJ_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Configuration of extension
-EXT_NAME=arrow_flight
+EXT_NAME=airport
 EXT_CONFIG=${PROJ_DIR}extension_config.cmake
 
 # Include the Makefile from extension-ci-tools

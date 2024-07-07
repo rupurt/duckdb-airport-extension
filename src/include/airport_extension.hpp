@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-class ArrowFlightExtension : public Extension {
+class AirportExtension : public Extension {
 public:
 	void Load(DuckDB &db) override;
 	std::string Name() override;

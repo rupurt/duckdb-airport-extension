@@ -1,0 +1,10 @@
+{
+  "dependencies": [
+    {
+      "name": "arrow",
+      "features": [
+        "flight"
+      ]
+    }
+  ]
+}

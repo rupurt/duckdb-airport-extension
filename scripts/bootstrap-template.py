@@ -59,12 +59,12 @@ def replace_everywhere(to_find, to_replace):
     replace("./README.md", to_find, to_replace)
     replace("./extension_config.cmake", to_find, to_replace)
 
-replace_everywhere("arrow_flight", name_extension)
-replace_everywhere("arrow_flight", name_extension.capitalize())
+replace_everywhere("airport", name_extension)
+replace_everywhere("airport", name_extension.capitalize())
 replace_everywhere("<extension_name>", name_extension)
 
 string_to_replace = name_extension
-string_to_find = "arrow_flight"
+string_to_find = "airport"
 
 # rename files
 os.rename(f'test/sql/{string_to_find}.test', f'test/sql/{string_to_replace}.test')
