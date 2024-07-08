@@ -32,15 +32,6 @@ namespace flight = arrow::flight;
 
 namespace duckdb {
 
-inline void airportScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto &name_vector = args.data[0];
-    UnaryExecutor::Execute<string_t, string_t>(
-	    name_vector, result, args.size(),
-	    [&](string_t name) {
-			return StringVector::AddString(result, "airport "+name.GetString()+" 🐥");;
-        });
-}
-
 
 struct ListFlightsBindData : public TableFunctionData {
     unique_ptr<string_t> connection_details;
@@ -77,24 +68,6 @@ static unique_ptr<FunctionData> list_flights_bind(ClientContext &context, TableF
     printf("Connected to %s\n", location.ToString().c_str());
 
     ARROW_ASSIGN_OR_RAISE(ret->flight_listing, flight_client->ListFlights());
-
-    // std::unique_ptr<flight::FlightInfo> flight_info;
-    // while(true) {
-    //     ARROW_ASSIGN_OR_RAISE(flight_info, listing->Next());
-
-    //     if(flight_info == nullptr) {
-    //         break;
-    //     }
-    //     printf("Got flight info\n");
-    //     printf("Flight info: %s\n", flight_info->ToString().c_str());
-    // }
-
-
-    //ARROW_ASSIGN_OR_RAISE(auto location,
-    //                    flight::Location::ForGrpcTcp("127.0.0.1", 8815));
-
-
-    // path
 
     // ordered - boolean
     // total_records - BIGINT
@@ -270,12 +243,12 @@ static void list_flights(ClientContext &context, TableFunctionInput &data, DataC
 }
 
 static void LoadInternal(DatabaseInstance &instance) {
+
     auto list_flights_function = TableFunction("airport_list_flights", {LogicalType::VARCHAR}, list_flights, list_flights_bind, ListFlightsGlobalState::Init);
     ExtensionUtil::RegisterFunction(instance, list_flights_function);
 
-//    auto get_flight_function = TableFunction("airport_take_flight", {LogicalType::VARCHAR}, take_flights, take_flight-bind, TakeFlightGlobalState::Init);
+//    auto take_flight_function = TableFunction("airport_take_flight", {LogicalType::VARCHAR}, take_flight, take_flight_bind, TakeFlightGlobalState::Init);
 //    ExtensionUtil::RegisterFunction(instance, take_flight_function);
-
 }
 
 void AirportExtension::Load(DuckDB &db) {
