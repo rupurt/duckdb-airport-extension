@@ -2,9 +2,15 @@
   "dependencies": [
     {
       "name": "arrow",
+      "default-features": false,
       "features": [
         "flight"
       ]
     }
-  ]
+  ],
+  "vcpkg-configuration": {
+    "overlay-ports": [
+      "./vcpkg-overlay/arrow"
+    ]
+  }
 }

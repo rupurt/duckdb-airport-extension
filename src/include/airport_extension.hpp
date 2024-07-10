@@ -4,6 +4,7 @@
 
 namespace duckdb {
 
+
 class AirportExtension : public Extension {
 public:
 	void Load(DuckDB &db) override;

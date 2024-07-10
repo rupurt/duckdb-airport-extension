@@ -1,0 +1,20 @@
+diff --git a/cpp/src/arrow/c/bridge.cc b/cpp/src/arrow/c/bridge.cc
+index eba575f4c..339210a87 100644
+--- a/cpp/src/arrow/c/bridge.cc
++++ b/cpp/src/arrow/c/bridge.cc
+@@ -37,6 +37,7 @@
+ #include "arrow/result.h"
+ #include "arrow/stl_allocator.h"
+ #include "arrow/type_traits.h"
++#include "arrow/util/align_util.h"
+ #include "arrow/util/bit_util.h"
+ #include "arrow/util/checked_cast.h"
+ #include "arrow/util/key_value_metadata.h"
+@@ -2039,6 +2040,7 @@ Status ExportStreamNext(const std::shared_ptr<RecordBatchReader>& src, int64_t i
+     ArrowArrayMarkReleased(out_array);
+     return Status::OK();
+   } else {
++    ARROW_ASSIGN_OR_RAISE(batch, util::EnsureAlignment(batch, 8, default_memory_pool()));
+     return ExportRecordBatch(*batch, out_array);
+   }
+ }

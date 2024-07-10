@@ -12,7 +12,7 @@ find_package(ArrowFlight REQUIRED)
 project(${TARGET_NAME})
 include_directories(src/include)
 
-set(EXTENSION_SOURCES src/airport_extension.cpp)
+set(EXTENSION_SOURCES src/airport_extension.cpp src/airport_flight_stream.cpp)
 
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

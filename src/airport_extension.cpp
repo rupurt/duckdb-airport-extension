@@ -8,8 +8,13 @@
 #include "duckdb/main/extension_util.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 
+#include "duckdb/function/table/arrow.hpp"
+
 // Arrow includes.
 #include <arrow/flight/client.h>
+#include <arrow/c/bridge.h>
+
+#include "airport_flight_stream.hpp"
 
 namespace flight = arrow::flight;
 
@@ -18,7 +23,7 @@ namespace flight = arrow::flight;
 #define ARROW_RETURN_IF_(condition, status, _) \
   do {                                         \
     if (ARROW_PREDICT_FALSE(condition)) {      \
-        throw InvalidInputException("Runway Arrow Flight Exception: " + status.message()); \
+        throw InvalidInputException("airport - Arrow Flight Exception: " + status.message()); \
     }                                          \
   } while (0)
 
@@ -28,9 +33,15 @@ namespace flight = arrow::flight;
   ARROW_RETURN_IF_(!(result_name).ok(), (result_name).status(), ARROW_STRINGIFY(rexpr)); \
   lhs = std::move(result_name).ValueUnsafe();
 
+#define ARROW_ASSERT_OK(expr)                                                              \
+  for (::arrow::Status _st = ::arrow::internal::GenericToStatus((expr)); !_st.ok();) \
+  throw InvalidInputException("airport - Arrow Flight Exception: " + _st.message());
+
 
 
 namespace duckdb {
+
+
 
 
 struct ListFlightsBindData : public TableFunctionData {
@@ -46,14 +57,179 @@ public:
     };
 
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
-        printf("Init\n");
         return make_uniq<ListFlightsGlobalState>();
     }
 };
 
+
+// struct TakeFlightBindData : public TableFunctionData {
+//     unique_ptr<string_t> connection_details;
+// 	ArrowSchemaWrapper schema;
+//     std::unique_ptr<flight::FlightClient> flight_client;
+//     std::unique_ptr<flight::FlightInfo> flight_info;
+//     std::unique_ptr<arrow::flight::FlightStreamReader> stream;
+
+//     std::shared_ptr<duckdb::ArrowArrayWrapper> current_array_chunk;
+
+//     ArrowTableType arrow_table;
+// };
+
+
+// struct TakeFlightBindData : public ArrowScanFunctionData {
+// public:
+//   using ArrowScanFunctionData::ArrowScanFunctionData;
+
+// 	ArrowSchemaWrapper schema;
+//     ArrowTableType arrow_table;
+//     std::unique_ptr<flight::FlightClient> flight_client;
+//     std::unique_ptr<flight::FlightInfo> flight_info;
+//     std::unique_ptr<arrow::flight::FlightStreamReader> stream;
+
+// };
+
+// struct TakeFlightScanData {
+//     std::unique_ptr<flight::FlightInfo> flight_info;
+//     std::unique_ptr<arrow::flight::FlightStreamReader> stream;
+// };
+
+static unique_ptr<FunctionData> take_flight_bind(ClientContext &context, TableFunctionBindInput &input,
+                                                    vector<LogicalType> &return_types, vector<string> &names) {
+
+    // To actually get the information about the flight, we need to either call
+    // GetFlightInfo or DoGet.
+    ARROW_ASSIGN_OR_RAISE(auto location,
+                        flight::Location::ForGrpcTcp("127.0.0.1", 8815));
+
+    ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
+
+    auto descriptor = arrow::flight::FlightDescriptor::Path({"uploaded.parquet"});
+
+    // Get the flight.
+    std::unique_ptr<arrow::flight::FlightInfo> flight_info;
+    ARROW_ASSIGN_OR_RAISE(flight_info, flight_client->GetFlightInfo(descriptor));
+
+    // After doing a little bit of examination of the DuckDb sources, I learned that
+    // that DuckDb supports the "C" interface of Arrow, this means that DuckDB doens't
+    // actually have a dependency on Arrow.
+    //
+    // Arrow Flight requires a dependency on the full Arrow library, because of all of
+    // the dependencies.
+    //
+    // Thankfully there is a "bridge" interface between the C++ based Arrow types returned
+    // by the C++ Arrow library and the C based Arrow types that DuckDB already knows how to
+    // consume.
+
+    // Start the stream here on the bind.
+    std::unique_ptr<arrow::flight::FlightStreamReader> stream;
+    ARROW_ASSIGN_OR_RAISE(stream, flight_client->DoGet(flight_info->endpoints()[0].ticket));
+
+    auto scan_data = make_uniq<AirportTakeFlightScanData>(
+        std::move(flight_info),
+        std::move(stream)
+    );
+
+    assert(!stream);
+    assert(!flight_info);
+
+    auto stream_factory_produce =
+        (stream_factory_produce_t)&AirportFlightStreamReader::CreateStream;
+
+    auto stream_factory_ptr = (uintptr_t)scan_data.get();
+
+    printf("SET Setting stream pointer to %p\n", stream_factory_ptr);
+
+    auto ret = make_uniq<AirportTakeFlightScanFunctionData>(stream_factory_produce,
+                                                            stream_factory_ptr);
+
+    // The flight_data now owns the scan_data.
+    ret->flight_data = std::move(scan_data);
+
+    assert(!scan_data);
+
+    printf("SET Stream address is NOW set to %p\n", ret->flight_data->stream_.get());
+    printf("Stream use count is %d\n", ret->flight_data->stream_.use_count());
+
+    auto &data = *ret;
+
+    // Convert the C++ schema into the C format schema, but store it on the bind
+    // information
+    std::shared_ptr<arrow::Schema> info_schema;
+    arrow::ipc::DictionaryMemo dictionary_memo;
+    ARROW_ASSIGN_OR_RAISE(info_schema, ret->flight_data->flight_info_->GetSchema(&dictionary_memo));
+
+    ARROW_ASSERT_OK(ExportSchema(*info_schema, &data.schema_root.arrow_schema));
+
+    for (idx_t col_idx = 0;
+        col_idx < (idx_t)data.schema_root.arrow_schema.n_children; col_idx++) {
+        auto &schema = *data.schema_root.arrow_schema.children[col_idx];
+        if (!schema.release) {
+            throw InvalidInputException("airport_take_flight: released schema passed");
+        }
+        auto arrow_type = ArrowTableFunction::GetArrowLogicalType(schema);
+        if (schema.dictionary) {
+            auto dictionary_type = ArrowTableFunction::GetArrowLogicalType(*schema.dictionary);
+            return_types.emplace_back(dictionary_type->GetDuckType());
+            arrow_type->SetDictionary(std::move(dictionary_type));
+        } else {
+            return_types.emplace_back(arrow_type->GetDuckType());
+        }
+        ret->arrow_table.AddColumn(col_idx, std::move(arrow_type));
+        auto format = string(schema.format);
+        auto name = string(schema.name);
+        if (name.empty()) {
+            name = string("v") + to_string(col_idx);
+        }
+        names.push_back(name);
+    }
+    QueryResult::DeduplicateColumns(names);
+    return std::move(ret);
+}
+
+static void take_flight(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+  if (!data_p.local_state) {
+      printf("No local state\n");
+      return;
+  }
+  printf("Taking flight called\n");
+  auto &data = data_p.bind_data->CastNoConst<ArrowScanFunctionData>();
+  auto &state = data_p.local_state->Cast<ArrowScanLocalState>();
+  auto &global_state = data_p.global_state->Cast<ArrowScanGlobalState>();
+
+  //! Out of tuples in this chunk
+  printf("Chunk offset is %d\n", state.chunk_offset);
+  printf("Chunk length is %d\n", state.chunk->arrow_array.length);
+  if (state.chunk_offset >= (idx_t)state.chunk->arrow_array.length) {
+    if (!ArrowTableFunction::ArrowScanParallelStateNext(context, data_p.bind_data.get(), state,
+                                    global_state)) {
+      return;
+    }
+  }
+  int64_t output_size =
+      MinValue<int64_t>(STANDARD_VECTOR_SIZE,
+                        state.chunk->arrow_array.length - state.chunk_offset);
+  data.lines_read += output_size;
+  printf("Can remove filter columns %d\n", global_state.CanRemoveFilterColumns());
+
+  if (global_state.CanRemoveFilterColumns()) {
+    state.all_columns.Reset();
+    state.all_columns.SetCardinality(output_size);
+    ArrowTableFunction::ArrowToDuckDB(state, data.arrow_table.GetColumns(), state.all_columns,
+                  data.lines_read - output_size, false);
+    output.ReferenceColumns(state.all_columns, global_state.projection_ids);
+  } else {
+    output.SetCardinality(output_size);
+    ArrowTableFunction::ArrowToDuckDB(state, data.arrow_table.GetColumns(), output,
+                  data.lines_read - output_size, false);
+  }
+
+  output.Verify();
+  state.chunk_offset += output.size();
+}
+
+
+
 static unique_ptr<FunctionData> list_flights_bind(ClientContext &context, TableFunctionBindInput &input,
                                                     vector<LogicalType> &return_types, vector<string> &names) {
-    printf("Calling bind\n");
 	auto ret = make_uniq<ListFlightsBindData>();
 
     // The data is going to be returned in the format of
@@ -242,13 +418,28 @@ static void list_flights(ClientContext &context, TableFunctionInput &data, DataC
     output.SetCardinality(output_row_index);
 }
 
-static void LoadInternal(DatabaseInstance &instance) {
+unique_ptr<NodeStatistics> take_flight_cardinality(ClientContext &context, const FunctionData *data) {
+	return make_uniq<NodeStatistics>();
+}
 
+static void LoadInternal(DatabaseInstance &instance) {
     auto list_flights_function = TableFunction("airport_list_flights", {LogicalType::VARCHAR}, list_flights, list_flights_bind, ListFlightsGlobalState::Init);
     ExtensionUtil::RegisterFunction(instance, list_flights_function);
 
-//    auto take_flight_function = TableFunction("airport_take_flight", {LogicalType::VARCHAR}, take_flight, take_flight_bind, TakeFlightGlobalState::Init);
-//    ExtensionUtil::RegisterFunction(instance, take_flight_function);
+    auto take_flight_function = TableFunction(
+        "airport_take_flight",
+        {LogicalType::VARCHAR},
+        take_flight,
+        take_flight_bind,
+        ArrowTableFunction::ArrowScanInitGlobal,
+        ArrowTableFunction::ArrowScanInitLocal);
+
+    take_flight_function.cardinality = take_flight_cardinality;
+    take_flight_function.get_batch_index = nullptr;
+    take_flight_function.projection_pushdown = true;
+    take_flight_function.filter_pushdown = false;
+
+    ExtensionUtil::RegisterFunction(instance, take_flight_function);
 }
 
 void AirportExtension::Load(DuckDB &db) {

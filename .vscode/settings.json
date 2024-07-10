@@ -1,0 +1,29 @@
+{
+  "cmake.environment": {
+    "GEN": "ninja",
+    "VCPKG_TOOLCHAIN_PATH": "${workspaceFolder}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+  },
+  "workbench.colorCustomizations": {
+    "activityBar.activeBackground": "#3d9c89",
+    "activityBar.background": "#3d9c89",
+    "activityBar.foreground": "#e7e7e7",
+    "activityBar.inactiveForeground": "#e7e7e799",
+    "activityBarBadge.background": "#e7d1ed",
+    "activityBarBadge.foreground": "#15202b",
+    "commandCenter.border": "#e7e7e799",
+    "sash.hoverBorder": "#3d9c89",
+    "statusBar.background": "#2f7769",
+    "statusBar.foreground": "#e7e7e7",
+    "statusBarItem.hoverBackground": "#3d9c89",
+    "statusBarItem.remoteBackground": "#2f7769",
+    "statusBarItem.remoteForeground": "#e7e7e7",
+    "titleBar.activeBackground": "#2f7769",
+    "titleBar.activeForeground": "#e7e7e7",
+    "titleBar.inactiveBackground": "#2f776999",
+    "titleBar.inactiveForeground": "#e7e7e799"
+  },
+  "peacock.color": "#2f7769",
+  "files.associations": {
+    "optional": "cpp"
+  }
+}
