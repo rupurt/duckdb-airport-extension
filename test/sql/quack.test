@@ -6,7 +6,7 @@
 statement error
 SELECT * from airport_list_flights('hello');
 ----
-Catalog Error: Scalar Function with name airport_list_flights does not exist!
+Catalog Error: Table Function with name airport_list_flights does not exist!
 
 # Require statement will ensure this test is run with this extension loaded
 require airport
