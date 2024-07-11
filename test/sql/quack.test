@@ -4,20 +4,9 @@
 
 # Before we load the extension, this will fail
 statement error
-SELECT airport('Sam');
+SELECT * from airport_list_flights('hello');
 ----
-Catalog Error: Scalar Function with name airport does not exist!
+Catalog Error: Scalar Function with name airport_list_flights does not exist!
 
 # Require statement will ensure this test is run with this extension loaded
 require airport
-
-# Confirm the extension works
-query I
-SELECT airport('Sam');
-----
-airport Sam 🐥
-
-query I
-SELECT airport_openssl_version('Michael');
-----
-<REGEX>:airport Michael, my linked OpenSSL version is OpenSSL.*
