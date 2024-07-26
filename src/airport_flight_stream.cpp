@@ -37,7 +37,6 @@ std::shared_ptr<arrow::Schema> AirportFlightStreamReader::schema() const {
 /// reaching end of stream
 arrow::Status AirportFlightStreamReader::ReadNext(
   std::shared_ptr<arrow::RecordBatch> *batch) {
-  printf("Calling READNEXT\n");
   AIRPORT_ASSIGN_OR_RAISE(auto chunk, flight_stream_.get()->Next());
   if (!chunk.data) {
     // End of the stream has been reached.
@@ -54,15 +53,9 @@ duckdb::unique_ptr<duckdb::ArrowArrayStreamWrapper>
 AirportFlightStreamReader::CreateStream(uintptr_t buffer_ptr,
                                          ArrowStreamParameters &parameters) {
   assert(buffer_ptr != 0);
-  printf("Got buffer ptr %p\n", buffer_ptr);
 
   auto buffer_data = reinterpret_cast<AirportTakeFlightScanData *>(buffer_ptr);
 
-  //auto buffer_data = reinterpret_cast<std::shared_ptr<AirportTakeFlightScanData> *>(buffer_ptr);
-  printf("READ< Buffer data is %p\n", &buffer_data);
-  printf("READ> Stream address %p\n", buffer_data->stream_.get());
-
-  //assert(1 == 0);
   // We're playing a trick here to recast the FlightStreamReader as a RecordBatchReader,
   // I'm not sure how else to do this.
 
@@ -70,10 +63,6 @@ AirportFlightStreamReader::CreateStream(uintptr_t buffer_ptr,
   // to take a FlightStreamReader instead of a RecordBatchReader.
 
   AIRPORT_ASSIGN_OR_RAISE(auto reader, flight::MakeRecordBatchReader(buffer_data->stream_));
-  printf("Created a record batch reader\n");
-
-  // FIXME: since we have a flight record batch reader, we need to ensure alignment.
-
 
   // Create arrow stream
   auto stream_wrapper = duckdb::make_uniq<duckdb::ArrowArrayStreamWrapper>();
@@ -111,8 +100,5 @@ void AirportFlightStreamReader::GetSchema(uintptr_t buffer_ptr,
   arrow::ipc::DictionaryMemo dictionary_memo;
   AIRPORT_ASSIGN_OR_RAISE(info_schema, reader->get()->flight_info_->GetSchema(&dictionary_memo));
 
-  AIRPORT_ASSERT_OK(ExportSchema(*info_schema, &schema.arrow_schema));
-}
-
-
+  AIRPORT_ASSERT_OK(ExportSchema(*info_schema, &schema.arrow_schema));}
 } // namespace duckdb

@@ -56,44 +56,60 @@ public:
 
     };
 
+    idx_t MaxThreads() const override {
+        return 1;
+	}
+
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
+        auto filters = input.filters.get();
+
+        if (filters) {
+            auto list_flights_field_names = {
+                "flight_descriptor", // 0
+                "endpoint", // 1
+                "ordered",  // 2
+                "total_records", //3
+                "total_bytes",  //4
+                "app_metadata", //5
+                "schema" //6
+            };
+
+            vector<string> filter_names;
+//            idx_t column_array_index = 0;
+            for (auto foo : input.column_ids)
+            {
+//                printf("Column id=%llu index=%d name=%s\n", foo, column_array_index, list_flights_field_names.begin()[foo]);
+                filter_names.push_back(list_flights_field_names.begin()[foo]);
+//                column_array_index += 1;
+            }
+
+            // FIXME: need a way to translate the column index into the column name.
+            idx_t filter_index = 0;
+            for (auto &filter : filters->filters)
+            {
+                auto column_id = filter.first;
+                auto spec = filter.second.get()->ToString(filter_names.at(filter_index));
+                printf("Column %llu has filter %s\n", column_id, spec.c_str());
+                filter_index = filter_index + 1;
+            }
+
+            // So these filters are pretty simple, but they don't allow the ability to
+
+        }
+
+        // So now we need to get the colum names that are referenced.
         return make_uniq<ListFlightsGlobalState>();
     }
 };
 
 
-// struct TakeFlightBindData : public TableFunctionData {
-//     unique_ptr<string_t> connection_details;
-// 	ArrowSchemaWrapper schema;
-//     std::unique_ptr<flight::FlightClient> flight_client;
-//     std::unique_ptr<flight::FlightInfo> flight_info;
-//     std::unique_ptr<arrow::flight::FlightStreamReader> stream;
+static unique_ptr<FunctionData> take_flight_bind(
+        ClientContext &context,
+        TableFunctionBindInput &input,
+        vector<LogicalType> &return_types,
+        vector<string> &names) {
+    // Lets get some parameters.
 
-//     std::shared_ptr<duckdb::ArrowArrayWrapper> current_array_chunk;
-
-//     ArrowTableType arrow_table;
-// };
-
-
-// struct TakeFlightBindData : public ArrowScanFunctionData {
-// public:
-//   using ArrowScanFunctionData::ArrowScanFunctionData;
-
-// 	ArrowSchemaWrapper schema;
-//     ArrowTableType arrow_table;
-//     std::unique_ptr<flight::FlightClient> flight_client;
-//     std::unique_ptr<flight::FlightInfo> flight_info;
-//     std::unique_ptr<arrow::flight::FlightStreamReader> stream;
-
-// };
-
-// struct TakeFlightScanData {
-//     std::unique_ptr<flight::FlightInfo> flight_info;
-//     std::unique_ptr<arrow::flight::FlightStreamReader> stream;
-// };
-
-static unique_ptr<FunctionData> take_flight_bind(ClientContext &context, TableFunctionBindInput &input,
-                                                    vector<LogicalType> &return_types, vector<string> &names) {
 
     // To actually get the information about the flight, we need to either call
     // GetFlightInfo or DoGet.
@@ -102,7 +118,7 @@ static unique_ptr<FunctionData> take_flight_bind(ClientContext &context, TableFu
 
     ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
 
-    auto descriptor = arrow::flight::FlightDescriptor::Path({"uploaded.parquet"});
+    auto descriptor = arrow::flight::FlightDescriptor::Path({"counter-stream"});
 
     // Get the flight.
     std::unique_ptr<arrow::flight::FlightInfo> flight_info;
@@ -121,6 +137,7 @@ static unique_ptr<FunctionData> take_flight_bind(ClientContext &context, TableFu
 
     // Start the stream here on the bind.
     std::unique_ptr<arrow::flight::FlightStreamReader> stream;
+
     ARROW_ASSIGN_OR_RAISE(stream, flight_client->DoGet(flight_info->endpoints()[0].ticket));
 
     auto scan_data = make_uniq<AirportTakeFlightScanData>(
@@ -136,8 +153,6 @@ static unique_ptr<FunctionData> take_flight_bind(ClientContext &context, TableFu
 
     auto stream_factory_ptr = (uintptr_t)scan_data.get();
 
-    printf("SET Setting stream pointer to %p\n", stream_factory_ptr);
-
     auto ret = make_uniq<AirportTakeFlightScanFunctionData>(stream_factory_produce,
                                                             stream_factory_ptr);
 
@@ -145,9 +160,6 @@ static unique_ptr<FunctionData> take_flight_bind(ClientContext &context, TableFu
     ret->flight_data = std::move(scan_data);
 
     assert(!scan_data);
-
-    printf("SET Stream address is NOW set to %p\n", ret->flight_data->stream_.get());
-    printf("Stream use count is %d\n", ret->flight_data->stream_.use_count());
 
     auto &data = *ret;
 
@@ -187,17 +199,13 @@ static unique_ptr<FunctionData> take_flight_bind(ClientContext &context, TableFu
 
 static void take_flight(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
   if (!data_p.local_state) {
-      printf("No local state\n");
       return;
   }
-  printf("Taking flight called\n");
   auto &data = data_p.bind_data->CastNoConst<ArrowScanFunctionData>();
   auto &state = data_p.local_state->Cast<ArrowScanLocalState>();
   auto &global_state = data_p.global_state->Cast<ArrowScanGlobalState>();
 
   //! Out of tuples in this chunk
-  printf("Chunk offset is %d\n", state.chunk_offset);
-  printf("Chunk length is %d\n", state.chunk->arrow_array.length);
   if (state.chunk_offset >= (idx_t)state.chunk->arrow_array.length) {
     if (!ArrowTableFunction::ArrowScanParallelStateNext(context, data_p.bind_data.get(), state,
                                     global_state)) {
@@ -208,7 +216,6 @@ static void take_flight(ClientContext &context, TableFunctionInput &data_p, Data
       MinValue<int64_t>(STANDARD_VECTOR_SIZE,
                         state.chunk->arrow_array.length - state.chunk_offset);
   data.lines_read += output_size;
-  printf("Can remove filter columns %d\n", global_state.CanRemoveFilterColumns());
 
   if (global_state.CanRemoveFilterColumns()) {
     state.all_columns.Reset();
@@ -226,24 +233,27 @@ static void take_flight(ClientContext &context, TableFunctionInput &data_p, Data
   state.chunk_offset += output.size();
 }
 
-
-
 static unique_ptr<FunctionData> list_flights_bind(ClientContext &context, TableFunctionBindInput &input,
                                                     vector<LogicalType> &return_types, vector<string> &names) {
+
+    auto server_location = input.inputs[0].ToString();
+    auto criteria = input.inputs[1].ToString();
+
 	auto ret = make_uniq<ListFlightsBindData>();
 
     // The data is going to be returned in the format of
 
     ARROW_ASSIGN_OR_RAISE(auto location,
-                        flight::Location::ForGrpcTcp("127.0.0.1", 8815));
+                          flight::Location::Parse(server_location));
 
     std::unique_ptr<flight::FlightClient> flight_client;
     ARROW_ASSIGN_OR_RAISE(flight_client, flight::FlightClient::Connect(location));
 
     // Now send a list flights request.
-    printf("Connected to %s\n", location.ToString().c_str());
+    arrow::flight::FlightCallOptions call_options;
+    call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
 
-    ARROW_ASSIGN_OR_RAISE(ret->flight_listing, flight_client->ListFlights());
+    ARROW_ASSIGN_OR_RAISE(ret->flight_listing, flight_client->ListFlights(call_options, {criteria}));
 
     // ordered - boolean
     // total_records - BIGINT
@@ -251,12 +261,17 @@ static unique_ptr<FunctionData> list_flights_bind(ClientContext &context, TableF
     // metadata - bytes
 
 
-    child_list_t<LogicalType> flight_descriptor_members = {{"cmd", LogicalType::BLOB}, {"path", LogicalType::LIST(LogicalType::VARCHAR)}};
+    child_list_t<LogicalType> flight_descriptor_members = {
+        {"cmd", LogicalType::BLOB},
+        {"path", LogicalType::LIST(LogicalType::VARCHAR)}
+    };
 
-    auto endpoint_type = LogicalType::STRUCT({{"ticket", LogicalType::BLOB},
-                                               {"location", LogicalType::LIST(LogicalType::VARCHAR)},
-                                               {"expiration_time", LogicalType::TIMESTAMP},
-                                               {"app_metadata", LogicalType::BLOB}});
+    auto endpoint_type = LogicalType::STRUCT({
+        {"ticket", LogicalType::BLOB},
+        {"location", LogicalType::LIST(LogicalType::VARCHAR)},
+        {"expiration_time", LogicalType::TIMESTAMP},
+        {"app_metadata", LogicalType::BLOB}
+    });
 
 
     std::initializer_list<duckdb::LogicalType> table_types = {
@@ -270,8 +285,16 @@ static unique_ptr<FunctionData> list_flights_bind(ClientContext &context, TableF
     };
     return_types.insert(return_types.end(), table_types.begin(), table_types.end());
 
-    auto table_names = {"flight_descriptor", "endpoint", "ordered", "total_records", "total_bytes", "app_metadata", "schema"};
-    names.insert(names.end(), table_names.begin(), table_names.end());
+    auto list_flights_field_names = {
+        "flight_descriptor",
+        "endpoint",
+        "ordered",
+        "total_records",
+        "total_bytes",
+        "app_metadata",
+        "schema"
+    };
+    names.insert(names.end(), list_flights_field_names.begin(), list_flights_field_names.end());
 
 	return std::move(ret);
 }
@@ -279,7 +302,7 @@ static unique_ptr<FunctionData> list_flights_bind(ClientContext &context, TableF
 
 static void list_flights(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = data.bind_data->Cast<ListFlightsBindData>();
-	auto &global_state = data.global_state->Cast<ListFlightsGlobalState>();
+	//auto &global_state = data.global_state->Cast<ListFlightsGlobalState>();
 
     std::unique_ptr<flight::FlightInfo> flight_info;
 
@@ -419,11 +442,55 @@ static void list_flights(ClientContext &context, TableFunctionInput &data, DataC
 }
 
 unique_ptr<NodeStatistics> take_flight_cardinality(ClientContext &context, const FunctionData *data) {
-	return make_uniq<NodeStatistics>();
+    // We can ask look at the flight info's number of estimaE
+    auto d = reinterpret_cast<const AirportTakeFlightScanFunctionData *>(data);
+
+    auto flight_estimated_records = d->flight_data.get()->flight_info_->total_records();
+
+    if(flight_estimated_records != -1) {
+        return make_uniq<NodeStatistics>(flight_estimated_records);
+    }
+    return make_uniq<NodeStatistics>();
 }
 
+
+void list_flights_complex_filter_pushdown(ClientContext &context, LogicalGet &get, FunctionData *bind_data_p,
+                                          vector<unique_ptr<Expression>> &filters) {
+//	auto &data = bind_data_p->Cast<JSONScanData>();
+
+    for(auto &f : filters) {
+        printf("Filter is %s\n", f->ToString().c_str());
+    }
+
+    // SimpleMultiFileList file_list(std::move(data.files));
+
+	// auto filtered_list =
+	//     MultiFileReader().ComplexFilterPushdown(context, file_list, data.options.file_options, get, filters);
+	// if (filtered_list) {
+	// 	MultiFileReader().PruneReaders(data, *filtered_list);
+	// 	data.files = filtered_list->GetAllFiles();
+	// } else {
+	// 	data.files = file_list.GetAllFiles();
+	// }
+}
+
+
 static void LoadInternal(DatabaseInstance &instance) {
-    auto list_flights_function = TableFunction("airport_list_flights", {LogicalType::VARCHAR}, list_flights, list_flights_bind, ListFlightsGlobalState::Init);
+
+    // We could add some parameter here for authentication
+    // and extra headers.
+    auto list_flights_function = TableFunction(
+        "airport_list_flights",
+        {LogicalType::VARCHAR, LogicalType::VARCHAR},
+        list_flights,
+        list_flights_bind,
+        ListFlightsGlobalState::Init);
+
+    list_flights_function.pushdown_complex_filter = list_flights_complex_filter_pushdown;
+    list_flights_function.filter_pushdown = false;
+
+    // Need a named parameter for the criteria.
+
     ExtensionUtil::RegisterFunction(instance, list_flights_function);
 
     auto take_flight_function = TableFunction(
