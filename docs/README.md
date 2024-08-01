@@ -13,12 +13,19 @@ Arrow Flight is an RPC framework for high-performance data services based on [Ap
 
 ### Listing Flights
 
-```airport_list_flights(VARCHAR)```
+```airport_list_flights(location, criteria)```
+
+Parameters:
+
+| Parameter Name | Type | Description |
+|----------------|------|-------------|
+| `location` | VARCHAR | This is the location of the Flight server to contact |
+| `criteria` | VARCHAR | This is free form criteria to pass to the Flight server |
 
 This function returns a list of Arrow Flights that are available at a particular endpoint.
 
 ```sql
-select * from airport_list_flights('http://127.0.0.1:8815');
+> select * from airport_list_flights('http://127.0.0.1:8815', null);
 
 flight_descriptor = [uploaded.parquet]
          endpoint = [{'ticket': uploaded.parquet, 'location': [grpc://0.0.0.0:8815], 'expiration_time': NULL, 'app_metadata': }]
@@ -29,18 +36,68 @@ flight_descriptor = [uploaded.parquet]
            schema = Character: string
 ```
 
+In addition to the `criteria` parameter, the Airport extension will pass a GRPC header
+that contains a JSON serialized representation of all of the filters that are applied to
+the results.
 
+To illustrate this through an example:
 
-
-
-
-## Getting started
-
-First step to getting started is to create your own repo from this template by clicking `Use this template`. Then clone your new repository using
-```sh
-git clone --recurse-submodules git@github.com:rustyconover/duckdb-arrow-flight-extension.git
+```sql
+select * from airport_list_flights('grpc://localhost:8815/', null) where total_bytes = 5;
 ```
-Note that `--recurse-submodules` will ensure DuckDB is pulled which is required to build the extension.
+
+The GRPC header `airport-duckdb-json-filters` will be set to
+
+```json
+{
+ "filters": [
+  {
+   "expression_class": "BOUND_COMPARISON",
+   "type": "COMPARE_EQUAL",
+   "left": {
+    "expression_class": "BOUND_COLUMN_REF",
+    "type": "BOUND_COLUMN_REF",
+    "alias": "total_bytes",
+    "return_type": {
+     "id": "BIGINT"
+    }
+   },
+   "right": {
+    "expression_class": "BOUND_CONSTANT",
+    "type": "VALUE_CONSTANT",
+    "value": {
+     "type": {
+      "id": "BIGINT"
+     },
+     "is_null": false,
+     "value": 5
+    }
+   }
+  }
+ ]
+}
+```
+
+The GRPC header will not contain newlines, but the JSON has been reformatted for ease of comprehension.
+
+It is up to the implementer of the GRPC server to use this header to apply optimizations.  The Airport DuckDB extension will still apply the filters to the result returned by the server. This means that the filter logic is purely advisory.  If Arrow Flight servers implement the filtering logic server side it can unlock some impressive optimizations.  The JSON schema of the serialized filter expressions is not guaranteed to remain unchanged across DuckDB versions.
+
+
+
+## Implementation Notes
+
+### TODO
+
+1. Authorization Support
+2. Integration with the DuckDB catalog.
+3. Ingestigate the multithreaded endpoint support.
+4. Write support?  How to do updates of rows against tables?
+
+### Memory Alignment of Apache Arrow Buffers
+
+This extension applied a change to the C interface of Apache Arrow that enforces 8 byte alignment of the column data.  DuckDB requires that this alignment is present, where Apache Arrow and Arrow Flight do not require this.
+
+If other extensions use Apache Arrow please ensure that the patch `align-record-batch.patch` is applied from `vcpkg-overlay/arrow`.
 
 ## Building
 ### Managing dependencies

@@ -10,6 +10,9 @@
 
 #include "duckdb/function/table/arrow.hpp"
 
+#include "airport_json_common.hpp"
+#include "airport_json_serializer.hpp"
+
 // Arrow includes.
 #include <arrow/flight/client.h>
 #include <arrow/c/bridge.h>
@@ -17,8 +20,6 @@
 #include "airport_flight_stream.hpp"
 
 namespace flight = arrow::flight;
-
-
 
 #define ARROW_RETURN_IF_(condition, status, _) \
   do {                                         \
@@ -37,21 +38,19 @@ namespace flight = arrow::flight;
   for (::arrow::Status _st = ::arrow::internal::GenericToStatus((expr)); !_st.ok();) \
   throw InvalidInputException("airport - Arrow Flight Exception: " + _st.message());
 
-
-
 namespace duckdb {
 
-
-
-
 struct ListFlightsBindData : public TableFunctionData {
-    unique_ptr<string_t> connection_details;
-
-    std::unique_ptr<flight::FlightListing> flight_listing;
+//    unique_ptr<string_t> connection_details;
+    string json_filters;
+    string criteria;
+    std::unique_ptr<flight::FlightClient> flight_client;
 };
 
 struct ListFlightsGlobalState : public GlobalTableFunctionState {
 public:
+    std::unique_ptr<flight::FlightListing> listing;
+
     ListFlightsGlobalState() {
 
     };
@@ -61,43 +60,6 @@ public:
 	}
 
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
-        auto filters = input.filters.get();
-
-        if (filters) {
-            auto list_flights_field_names = {
-                "flight_descriptor", // 0
-                "endpoint", // 1
-                "ordered",  // 2
-                "total_records", //3
-                "total_bytes",  //4
-                "app_metadata", //5
-                "schema" //6
-            };
-
-            vector<string> filter_names;
-//            idx_t column_array_index = 0;
-            for (auto foo : input.column_ids)
-            {
-//                printf("Column id=%llu index=%d name=%s\n", foo, column_array_index, list_flights_field_names.begin()[foo]);
-                filter_names.push_back(list_flights_field_names.begin()[foo]);
-//                column_array_index += 1;
-            }
-
-            // FIXME: need a way to translate the column index into the column name.
-            idx_t filter_index = 0;
-            for (auto &filter : filters->filters)
-            {
-                auto column_id = filter.first;
-                auto spec = filter.second.get()->ToString(filter_names.at(filter_index));
-                printf("Column %llu has filter %s\n", column_id, spec.c_str());
-                filter_index = filter_index + 1;
-            }
-
-            // So these filters are pretty simple, but they don't allow the ability to
-
-        }
-
-        // So now we need to get the colum names that are referenced.
         return make_uniq<ListFlightsGlobalState>();
     }
 };
@@ -108,8 +70,10 @@ static unique_ptr<FunctionData> take_flight_bind(
         TableFunctionBindInput &input,
         vector<LogicalType> &return_types,
         vector<string> &names) {
-    // Lets get some parameters.
 
+    // FIXME: make the location variable.
+
+    // FIXME: make the stream variable.
 
     // To actually get the information about the flight, we need to either call
     // GetFlightInfo or DoGet.
@@ -119,6 +83,9 @@ static unique_ptr<FunctionData> take_flight_bind(
     ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
 
     auto descriptor = arrow::flight::FlightDescriptor::Path({"counter-stream"});
+
+    // FIXME: need to move this call to getting the flight info after the bind
+    // because the filters won't be populated until the bind is complete.
 
     // Get the flight.
     std::unique_ptr<arrow::flight::FlightInfo> flight_info;
@@ -137,7 +104,6 @@ static unique_ptr<FunctionData> take_flight_bind(
 
     // Start the stream here on the bind.
     std::unique_ptr<arrow::flight::FlightStreamReader> stream;
-
     ARROW_ASSIGN_OR_RAISE(stream, flight_client->DoGet(flight_info->endpoints()[0].ticket));
 
     auto scan_data = make_uniq<AirportTakeFlightScanData>(
@@ -239,27 +205,18 @@ static unique_ptr<FunctionData> list_flights_bind(ClientContext &context, TableF
     auto server_location = input.inputs[0].ToString();
     auto criteria = input.inputs[1].ToString();
 
-	auto ret = make_uniq<ListFlightsBindData>();
-
-    // The data is going to be returned in the format of
+    auto ret = make_uniq<ListFlightsBindData>();
 
     ARROW_ASSIGN_OR_RAISE(auto location,
                           flight::Location::Parse(server_location));
 
-    std::unique_ptr<flight::FlightClient> flight_client;
-    ARROW_ASSIGN_OR_RAISE(flight_client, flight::FlightClient::Connect(location));
-
-    // Now send a list flights request.
-    arrow::flight::FlightCallOptions call_options;
-    call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
-
-    ARROW_ASSIGN_OR_RAISE(ret->flight_listing, flight_client->ListFlights(call_options, {criteria}));
+    ARROW_ASSIGN_OR_RAISE(ret->flight_client, flight::FlightClient::Connect(location));
+    ret->criteria = criteria;
 
     // ordered - boolean
     // total_records - BIGINT
     // total_bytes - BIGINT
     // metadata - bytes
-
 
     child_list_t<LogicalType> flight_descriptor_members = {
         {"cmd", LogicalType::BLOB},
@@ -302,11 +259,20 @@ static unique_ptr<FunctionData> list_flights_bind(ClientContext &context, TableF
 
 static void list_flights(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &bind_data = data.bind_data->Cast<ListFlightsBindData>();
-	//auto &global_state = data.global_state->Cast<ListFlightsGlobalState>();
+	auto &global_state = data.global_state->Cast<ListFlightsGlobalState>();
+
+    if(global_state.listing == nullptr) {
+        // Now send a list flights request.
+        arrow::flight::FlightCallOptions call_options;
+        call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
+        call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
+        printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
+
+        ARROW_ASSIGN_OR_RAISE(global_state.listing, bind_data.flight_client->ListFlights(call_options, {bind_data.criteria}));
+    }
 
     std::unique_ptr<flight::FlightInfo> flight_info;
-
-    ARROW_ASSIGN_OR_RAISE(flight_info, bind_data.flight_listing->Next());
+    ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next());
 
     if(flight_info == nullptr) {
         // There are no more flights to return.
@@ -434,7 +400,7 @@ static void list_flights(ClientContext &context, TableFunctionInput &data, DataC
         ARROW_ASSIGN_OR_RAISE(info_schema, flight_info->GetSchema(&dictionary_memo));
         FlatVector::GetData<string_t>(output.data[6])[output_row_index] = StringVector::AddStringOrBlob(output.data[6], info_schema->ToString());
 
-        ARROW_ASSIGN_OR_RAISE(flight_info, bind_data.flight_listing->Next());
+        ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next());
         output_row_index++;
     }
 
@@ -456,22 +422,125 @@ unique_ptr<NodeStatistics> take_flight_cardinality(ClientContext &context, const
 
 void list_flights_complex_filter_pushdown(ClientContext &context, LogicalGet &get, FunctionData *bind_data_p,
                                           vector<unique_ptr<Expression>> &filters) {
-//	auto &data = bind_data_p->Cast<JSONScanData>();
+    //	auto &data = bind_data_p->Cast<JSONScanData>();
 
-    for(auto &f : filters) {
-        printf("Filter is %s\n", f->ToString().c_str());
+    auto allocator = AirportJSONAllocator(BufferAllocator::Get(context));
+
+    auto alc = allocator.GetYYAlc();
+
+    auto doc = AirportJSONCommon::CreateDocument(alc);
+    auto result_obj = yyjson_mut_obj(doc);
+    yyjson_mut_doc_set_root(doc, result_obj);
+
+    auto filters_arr = yyjson_mut_arr(doc);
+
+    for (auto &f : filters)
+    {
+        auto serializer = AirportJsonSerializer(doc, true, true, true);
+        f->Serialize(serializer);
+        yyjson_mut_arr_append(filters_arr, serializer.GetRootObject());
     }
 
-    // SimpleMultiFileList file_list(std::move(data.files));
+    yyjson_mut_obj_add_val(doc, result_obj, "filters", filters_arr);
+    idx_t len;
+    auto data = yyjson_mut_val_write_opts(
+        result_obj,
+        AirportJSONCommon::WRITE_FLAG,
+        alc, reinterpret_cast<size_t *>(&len), nullptr);
 
-	// auto filtered_list =
-	//     MultiFileReader().ComplexFilterPushdown(context, file_list, data.options.file_options, get, filters);
-	// if (filtered_list) {
-	// 	MultiFileReader().PruneReaders(data, *filtered_list);
-	// 	data.files = filtered_list->GetAllFiles();
-	// } else {
-	// 	data.files = file_list.GetAllFiles();
-	// }
+    if (data == nullptr) {
+        throw SerializationException(
+            "Failed to serialize json, perhaps the query contains invalid utf8 characters?");
+    }
+
+    auto json_result = string(data, (size_t)len);
+
+    auto &bind_data = bind_data_p->Cast<ListFlightsBindData>();
+
+    bind_data.json_filters = json_result;
+
+    // Now how do I pass that as a header on the flight request to the flight server?
+}
+
+
+void take_flight_complex_filter_pushdown(ClientContext &context, LogicalGet &get, FunctionData *bind_data_p,
+                                        vector<unique_ptr<Expression>> &filters) {
+    auto allocator = AirportJSONAllocator(BufferAllocator::Get(context));
+
+    auto alc = allocator.GetYYAlc();
+
+    auto doc = AirportJSONCommon::CreateDocument(alc);
+    auto result_obj = yyjson_mut_obj(doc);
+    yyjson_mut_doc_set_root(doc, result_obj);
+
+    auto filters_arr = yyjson_mut_arr(doc);
+
+    for (auto &f : filters)
+    {
+        auto serializer = AirportJsonSerializer(doc, true, true, true);
+        f->Serialize(serializer);
+        yyjson_mut_arr_append(filters_arr, serializer.GetRootObject());
+    }
+
+    yyjson_mut_obj_add_val(doc, result_obj, "filters", filters_arr);
+    idx_t len;
+    auto data = yyjson_mut_val_write_opts(
+        result_obj,
+        AirportJSONCommon::WRITE_FLAG,
+        alc, reinterpret_cast<size_t *>(&len), nullptr);
+
+    if (data == nullptr) {
+        throw SerializationException(
+            "Failed to serialize json, perhaps the query contains invalid utf8 characters?");
+    }
+
+    auto json_result = string(data, (size_t)len);
+
+    auto &bind_data = bind_data_p->Cast<AirportTakeFlightScanFunctionData>();
+
+    bind_data.json_filters = json_result;
+}
+
+
+
+unique_ptr<ArrowArrayStreamWrapper> AirportProduceArrowScan(const ArrowScanFunctionData &function,
+                                                     const vector<column_t> &column_ids, TableFilterSet *filters) {
+	//! Generate Projection Pushdown Vector
+	ArrowStreamParameters parameters;
+	D_ASSERT(!column_ids.empty());
+	for (idx_t idx = 0; idx < column_ids.size(); idx++) {
+		auto col_idx = column_ids[idx];
+		if (col_idx != COLUMN_IDENTIFIER_ROW_ID) {
+			auto &schema = *function.schema_root.arrow_schema.children[col_idx];
+			parameters.projected_columns.projection_map[idx] = schema.name;
+			parameters.projected_columns.columns.emplace_back(schema.name);
+			parameters.projected_columns.filter_to_col[idx] = col_idx;
+		}
+	}
+	parameters.filters = filters;
+	return function.scanner_producer(function.stream_factory_ptr, parameters);
+}
+
+
+unique_ptr<GlobalTableFunctionState> AirportArrowScanInitGlobal(ClientContext &context,
+                                                                             TableFunctionInitInput &input) {
+	auto &bind_data = input.bind_data->Cast<ArrowScanFunctionData>();
+	auto result = make_uniq<ArrowScanGlobalState>();
+	result->stream = AirportProduceArrowScan(bind_data, input.column_ids, input.filters.get());
+
+    // Since we're single threaded, we can only really use a single thread at a time.
+	result->max_threads = 1;
+	if (input.CanRemoveFilterColumns()) {
+		result->projection_ids = input.projection_ids;
+		for (const auto &col_idx : input.column_ids) {
+			if (col_idx == COLUMN_IDENTIFIER_ROW_ID) {
+				result->scanned_types.emplace_back(LogicalType::ROW_TYPE);
+			} else {
+				result->scanned_types.push_back(bind_data.all_types[col_idx]);
+			}
+		}
+	}
+	return std::move(result);
 }
 
 
@@ -498,8 +567,10 @@ static void LoadInternal(DatabaseInstance &instance) {
         {LogicalType::VARCHAR},
         take_flight,
         take_flight_bind,
-        ArrowTableFunction::ArrowScanInitGlobal,
+        AirportArrowScanInitGlobal,
         ArrowTableFunction::ArrowScanInitLocal);
+
+    take_flight_function.pushdown_complex_filter = take_flight_complex_filter_pushdown;
 
     take_flight_function.cardinality = take_flight_cardinality;
     take_flight_function.get_batch_index = nullptr;

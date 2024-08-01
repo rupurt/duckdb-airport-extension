@@ -45,9 +45,9 @@ struct AirportTakeFlightScanFunctionData : public ArrowScanFunctionData {
 public:
   using ArrowScanFunctionData::ArrowScanFunctionData;
   std::unique_ptr<AirportTakeFlightScanData> flight_data = nullptr;
+
+  string json_filters;
 };
-
-
 
 struct AirportFlightStreamReader : public arrow::RecordBatchReader {
 protected:
