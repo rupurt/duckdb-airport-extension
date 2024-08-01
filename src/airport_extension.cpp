@@ -72,22 +72,59 @@ static unique_ptr<FunctionData> take_flight_bind(
         vector<string> &names) {
 
     // FIXME: make the location variable.
+    auto server_location = input.inputs[0].ToString();
+    ARROW_ASSIGN_OR_RAISE(auto location, flight::Location::Parse(server_location));
 
-    // FIXME: make the stream variable.
+    auto flight_descriptor = input.inputs[1];
+
+    arrow::flight::FlightDescriptor descriptor;
+
+    switch (flight_descriptor.type().id()) {
+        case LogicalTypeId::BLOB:
+        case LogicalTypeId::VARCHAR: {
+            descriptor = arrow::flight::FlightDescriptor::Command(flight_descriptor.ToString());
+        }
+        break;
+        case LogicalTypeId::LIST: {
+            auto &list_values = ListValue::GetChildren(flight_descriptor);
+            vector<string> components;
+            for (idx_t i = 0; i < list_values.size(); i++)
+            {
+                auto &child = list_values[i];
+                if (child.type().id() != LogicalTypeId::VARCHAR) {
+                    throw InvalidInputException("airport_take_flight: when specifying a path all list components must be a varchar");
+                }
+                components.emplace_back(child.ToString());
+            }
+            descriptor = arrow::flight::FlightDescriptor::Path(components);
+        }
+        break;
+        case LogicalTypeId::ARRAY:
+        {
+            auto &array_values = ArrayValue::GetChildren(flight_descriptor);
+            vector<string> components;
+            for (idx_t i = 0; i < array_values.size(); i++) {
+                auto &child = array_values[i];
+                if (child.type().id() != LogicalTypeId::VARCHAR) {
+                    throw InvalidInputException("airport_take_flight: when specifying a path all list components must be a varchar");
+                }
+                components.emplace_back(child.ToString());
+            }
+            descriptor = arrow::flight::FlightDescriptor::Path(components);
+        }
+        break;
+        // FIXME: deal with the union type returned by Arrow list flights.
+        default:
+            throw InvalidInputException("airport_take_flight: unknown descriptor type passed");
+    }
+
 
     // To actually get the information about the flight, we need to either call
     // GetFlightInfo or DoGet.
-    ARROW_ASSIGN_OR_RAISE(auto location,
-                        flight::Location::ForGrpcTcp("127.0.0.1", 8815));
-
     ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
 
-    auto descriptor = arrow::flight::FlightDescriptor::Path({"counter-stream"});
-
-    // FIXME: need to move this call to getting the flight info after the bind
-    // because the filters won't be populated until the bind is complete.
-
-    // Get the flight.
+    // Get the information about the flight, this will allow the
+    // endpoint information to be returned.
     std::unique_ptr<arrow::flight::FlightInfo> flight_info;
     ARROW_ASSIGN_OR_RAISE(flight_info, flight_client->GetFlightInfo(descriptor));
 
@@ -101,6 +138,9 @@ static unique_ptr<FunctionData> take_flight_bind(
     // Thankfully there is a "bridge" interface between the C++ based Arrow types returned
     // by the C++ Arrow library and the C based Arrow types that DuckDB already knows how to
     // consume.
+
+    // FIXME: need to move this call to getting the flight info after the bind
+    // because the filters won't be populated until the bind is complete.
 
     // Start the stream here on the bind.
     std::unique_ptr<arrow::flight::FlightStreamReader> stream;
@@ -523,10 +563,10 @@ unique_ptr<ArrowArrayStreamWrapper> AirportProduceArrowScan(const ArrowScanFunct
 
 
 unique_ptr<GlobalTableFunctionState> AirportArrowScanInitGlobal(ClientContext &context,
-                                                                             TableFunctionInitInput &input) {
+                                                                TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<ArrowScanFunctionData>();
-	auto result = make_uniq<ArrowScanGlobalState>();
-	result->stream = AirportProduceArrowScan(bind_data, input.column_ids, input.filters.get());
+    auto result = make_uniq<ArrowScanGlobalState>();
+    result->stream = AirportProduceArrowScan(bind_data, input.column_ids, input.filters.get());
 
     // Since we're single threaded, we can only really use a single thread at a time.
 	result->max_threads = 1;
@@ -564,7 +604,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 
     auto take_flight_function = TableFunction(
         "airport_take_flight",
-        {LogicalType::VARCHAR},
+        {LogicalType::VARCHAR, LogicalType::ANY},
         take_flight,
         take_flight_bind,
         AirportArrowScanInitGlobal,

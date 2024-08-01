@@ -19,7 +19,7 @@ Parameters:
 
 | Parameter Name | Type | Description |
 |----------------|------|-------------|
-| `location` | VARCHAR | This is the location of the Flight server to contact |
+| `location` | VARCHAR | This is the location of the Flight server |
 | `criteria` | VARCHAR | This is free form criteria to pass to the Flight server |
 
 This function returns a list of Arrow Flights that are available at a particular endpoint.
@@ -82,7 +82,30 @@ The GRPC header will not contain newlines, but the JSON has been reformatted for
 
 It is up to the implementer of the GRPC server to use this header to apply optimizations.  The Airport DuckDB extension will still apply the filters to the result returned by the server. This means that the filter logic is purely advisory.  If Arrow Flight servers implement the filtering logic server side it can unlock some impressive optimizations.  The JSON schema of the serialized filter expressions is not guaranteed to remain unchanged across DuckDB versions.
 
+### Taking a Flight
 
+```airport_take_flight(location, descriptor)```
+
+Parameters:
+
+| Parameter Name | Type | Description |
+|----------------|------|-------------|
+| `location` | VARCHAR | This is the location of the Flight server |
+| `descriptor` | ANY | This is the descriptor of the flight.  If its a VARCHAR or BLOB its interpreted as a command, if its an ARRAY or LIST of VARCHAR its considered a path based descriptor.  |
+
+```sql
+select * from airport_take_flight('grpc://localhost:8815/', ['counter-stream']) limit 5;
+┌─────────┐
+│ counter │
+│  int64  │
+├─────────┤
+│       0 │
+│       1 │
+│       2 │
+│       3 │
+│       4 │
+└─────────┘
+```
 
 ## Implementation Notes
 
