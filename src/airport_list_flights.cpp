@@ -25,20 +25,27 @@ namespace duckdb
 
   struct ListFlightsBindData : public TableFunctionData
   {
-    //    unique_ptr<string_t> connection_details;
-    string json_filters;
+    // This is is the location of the server
+    string server_location;
+
+    // This is the criteria that will be passed the list flights.
     string criteria;
-    std::unique_ptr<flight::FlightClient> flight_client;
+
+    // A JSON representation of filters being applied to the results,
+    // which will be passed to the server as a GRPC header.
+    string json_filters;
   };
 
   struct ListFlightsGlobalState : public GlobalTableFunctionState
   {
   public:
+    std::unique_ptr<flight::FlightClient> flight_client_;
     std::unique_ptr<flight::FlightListing> listing;
 
-    ListFlightsGlobalState() {
-
-    };
+    ListFlightsGlobalState(std::unique_ptr<flight::FlightClient> flight_client)
+    {
+      flight_client_ = std::move(flight_client);
+    }
 
     idx_t MaxThreads() const override
     {
@@ -47,7 +54,14 @@ namespace duckdb
 
     static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input)
     {
-      return make_uniq<ListFlightsGlobalState>();
+      auto &bind_data = input.bind_data->Cast<ListFlightsBindData>();
+
+      AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location,
+                                    flight::Location::Parse(bind_data.server_location));
+
+      AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
+
+      return make_uniq<ListFlightsGlobalState>(std::move(flight_client));
     }
   };
 
@@ -56,7 +70,6 @@ namespace duckdb
       TableFunctionBindInput &input,
       vector<LogicalType> &return_types, vector<string> &names)
   {
-
     auto server_location = input.inputs[0].ToString();
     string criteria = "";
 
@@ -66,11 +79,7 @@ namespace duckdb
     }
 
     auto ret = make_uniq<ListFlightsBindData>();
-
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location,
-                                  flight::Location::Parse(server_location));
-
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(ret->flight_client, flight::FlightClient::Connect(location));
+    ret->server_location = server_location;
     ret->criteria = criteria;
 
     // ordered - boolean
@@ -123,7 +132,7 @@ namespace duckdb
       call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
       // printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
 
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(global_state.listing, bind_data.flight_client->ListFlights(call_options, {bind_data.criteria}));
+      AIRPORT_ARROW_ASSIGN_OR_RAISE(global_state.listing, global_state.flight_client_->ListFlights(call_options, {bind_data.criteria}));
     }
 
     std::unique_ptr<flight::FlightInfo> flight_info;
@@ -144,7 +153,6 @@ namespace duckdb
 
     // Flat vector of list entries.
     auto descriptor_path_data = ListVector::GetData(*descriptor_entries[2]);
-
     auto endpoint_data = ListVector::GetData(output.data[1]);
 
     int output_row_index = 0;
@@ -275,8 +283,6 @@ namespace duckdb
       FunctionData *bind_data_p,
       vector<unique_ptr<Expression>> &filters)
   {
-    //	auto &data = bind_data_p->Cast<JSONScanData>();
-
     auto allocator = AirportJSONAllocator(BufferAllocator::Get(context));
 
     auto alc = allocator.GetYYAlc();
@@ -312,8 +318,6 @@ namespace duckdb
     auto &bind_data = bind_data_p->Cast<ListFlightsBindData>();
 
     bind_data.json_filters = json_result;
-
-    // Now how do I pass that as a header on the flight request to the flight server?
   }
 
   void AddListFlights(DatabaseInstance &instance)
