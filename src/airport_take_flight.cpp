@@ -85,7 +85,6 @@ namespace duckdb
 
     // Get the information about the flight, this will allow the
     // endpoint information to be returned.
-    // std::unique_ptr<flight::FlightInfo> flight_info;
     AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_info, flight_client->GetFlightInfo(descriptor));
 
     // After doing a little bit of examination of the DuckDb sources, I learned that
@@ -213,10 +212,10 @@ namespace duckdb
 
   static unique_ptr<NodeStatistics> take_flight_cardinality(ClientContext &context, const FunctionData *data)
   {
-    // We can ask look at the flight info's number of estimaE
-    auto d = reinterpret_cast<const AirportTakeFlightScanFunctionData *>(data);
-
-    auto flight_estimated_records = d->flight_data.get()->flight_info_->total_records();
+    // To estimate the cardinality of the flight, we can peek at the flight information
+    // that was retrieved during the bind function.
+    auto &bind_data = data->Cast<AirportTakeFlightScanFunctionData>();
+    auto flight_estimated_records = bind_data.flight_data.get()->flight_info_->total_records();
 
     if (flight_estimated_records != -1)
     {
