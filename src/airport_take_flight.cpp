@@ -23,6 +23,8 @@ namespace flight = arrow::flight;
 namespace duckdb
 {
 
+  // Create a FlightDescriptor from a DuckDB value which can be one of a few different
+  // types.
   static flight::FlightDescriptor flight_descriptor_from_value(duckdb::Value &flight_descriptor)
   {
     switch (flight_descriptor.type().id())
@@ -73,7 +75,6 @@ namespace duckdb
       vector<string> &names)
   {
 
-    // FIXME: make the location variable.
     auto server_location = input.inputs[0].ToString();
     AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location, flight::Location::Parse(server_location));
 
@@ -87,6 +88,8 @@ namespace duckdb
     // endpoint information to be returned.
     AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_info, flight_client->GetFlightInfo(descriptor));
 
+    // Store the flight info on the bind data.
+
     // After doing a little bit of examination of the DuckDb sources, I learned that
     // that DuckDb supports the "C" interface of Arrow, this means that DuckDB doens't
     // actually have a dependency on Arrow.
@@ -98,32 +101,16 @@ namespace duckdb
     // by the C++ Arrow library and the C based Arrow types that DuckDB already knows how to
     // consume.
 
-    // FIXME: need to move this call to getting the flight info after the bind
-    // because the filters won't be populated until the bind is complete.
-
-    // Start the stream here on the bind.
-    std::unique_ptr<flight::FlightStreamReader> stream;
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(stream, flight_client->DoGet(flight_info->endpoints()[0].ticket));
-
     auto scan_data = make_uniq<AirportTakeFlightScanData>(
         std::move(flight_info),
-        std::move(stream));
+        nullptr);
 
-    assert(!stream);
-    assert(!flight_info);
+    auto ret = make_uniq<AirportTakeFlightBindData>(
+        (stream_factory_produce_t)&AirportFlightStreamReader::CreateStream,
+        (uintptr_t)scan_data.get());
 
-    auto stream_factory_produce =
-        (stream_factory_produce_t)&AirportFlightStreamReader::CreateStream;
-
-    auto stream_factory_ptr = (uintptr_t)scan_data.get();
-
-    auto ret = make_uniq<AirportTakeFlightScanFunctionData>(stream_factory_produce,
-                                                            stream_factory_ptr);
-
-    // The flight_data now owns the scan_data.
-    ret->flight_data = std::move(scan_data);
-
-    assert(!scan_data);
+    ret->scan_data = std::move(scan_data);
+    ret->flight_client = std::move(flight_client);
 
     auto &data = *ret;
 
@@ -131,7 +118,7 @@ namespace duckdb
     // information
     std::shared_ptr<arrow::Schema> info_schema;
     arrow::ipc::DictionaryMemo dictionary_memo;
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, ret->flight_data->flight_info_->GetSchema(&dictionary_memo));
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, ret->scan_data->flight_info_->GetSchema(&dictionary_memo));
 
     AIRPORT_ARROW_ASSERT_OK(ExportSchema(*info_schema, &data.schema_root.arrow_schema));
 
@@ -180,8 +167,11 @@ namespace duckdb
     //! Out of tuples in this chunk
     if (state.chunk_offset >= (idx_t)state.chunk->arrow_array.length)
     {
-      if (!ArrowTableFunction::ArrowScanParallelStateNext(context, data_p.bind_data.get(), state,
-                                                          global_state))
+      if (!ArrowTableFunction::ArrowScanParallelStateNext(
+              context,
+              data_p.bind_data.get(),
+              state,
+              global_state))
       {
         return;
       }
@@ -214,8 +204,11 @@ namespace duckdb
   {
     // To estimate the cardinality of the flight, we can peek at the flight information
     // that was retrieved during the bind function.
-    auto &bind_data = data->Cast<AirportTakeFlightScanFunctionData>();
-    auto flight_estimated_records = bind_data.flight_data.get()->flight_info_->total_records();
+    //
+    // This estimate does not take into account any filters that may have been applied
+    //
+    auto &bind_data = data->Cast<AirportTakeFlightBindData>();
+    auto flight_estimated_records = bind_data.scan_data.get()->flight_info_->total_records();
 
     if (flight_estimated_records != -1)
     {
@@ -259,7 +252,7 @@ namespace duckdb
 
     auto json_result = string(data, (size_t)len);
 
-    auto &bind_data = bind_data_p->Cast<AirportTakeFlightScanFunctionData>();
+    auto &bind_data = bind_data_p->Cast<AirportTakeFlightBindData>();
 
     bind_data.json_filters = json_result;
   }
@@ -288,8 +281,25 @@ namespace duckdb
   static unique_ptr<GlobalTableFunctionState> AirportArrowScanInitGlobal(ClientContext &context,
                                                                          TableFunctionInitInput &input)
   {
-    auto &bind_data = input.bind_data->Cast<ArrowScanFunctionData>();
+    auto &bind_data = input.bind_data->Cast<AirportTakeFlightBindData>();
+
     auto result = make_uniq<ArrowScanGlobalState>();
+
+    std::unique_ptr<flight::FlightStreamReader> flight_stream;
+
+    arrow::flight::FlightCallOptions call_options;
+    call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
+    printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
+    call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
+
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(
+        flight_stream,
+        bind_data.flight_client->DoGet(
+            call_options,
+            bind_data.scan_data->flight_info_->endpoints()[0].ticket));
+
+    bind_data.scan_data->stream_ = std::move(flight_stream);
+
     result->stream = AirportProduceArrowScan(bind_data, input.column_ids, input.filters.get());
 
     // Since we're single threaded, we can only really use a single thread at a time.

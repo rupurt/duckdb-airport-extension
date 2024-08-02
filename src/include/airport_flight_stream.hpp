@@ -22,65 +22,63 @@
 
 #include "duckdb/function/table/arrow.hpp"
 
-
 namespace flight = arrow::flight;
-
 
 /// File copied from
 /// https://github.com/duckdb/duckdb-wasm/blob/0ad10e7db4ef4025f5f4120be37addc4ebe29618/lib/include/duckdb/web/arrow_stream_buffer.h
-namespace duckdb {
+namespace duckdb
+{
 
-struct AirportTakeFlightScanData {
+  struct AirportTakeFlightScanData
+  {
   public:
     AirportTakeFlightScanData(std::shared_ptr<flight::FlightInfo> flight_info,
-    std::shared_ptr<flight::FlightStreamReader> stream
-    ) : flight_info_(flight_info), stream_(stream) {}
+                              std::shared_ptr<flight::FlightStreamReader> stream) : flight_info_(flight_info), stream_(stream) {}
 
     std::shared_ptr<flight::FlightInfo> flight_info_;
     std::shared_ptr<arrow::flight::FlightStreamReader> stream_;
-};
+  };
 
+  struct AirportTakeFlightBindData : public ArrowScanFunctionData
+  {
+  public:
+    using ArrowScanFunctionData::ArrowScanFunctionData;
+    std::unique_ptr<AirportTakeFlightScanData> scan_data = nullptr;
+    std::unique_ptr<arrow::flight::FlightClient> flight_client = nullptr;
 
-struct AirportTakeFlightScanFunctionData : public ArrowScanFunctionData {
-public:
-  using ArrowScanFunctionData::ArrowScanFunctionData;
-  std::unique_ptr<AirportTakeFlightScanData> flight_data = nullptr;
+    string json_filters;
+  };
 
-  string json_filters;
-};
+  struct AirportFlightStreamReader : public arrow::RecordBatchReader
+  {
+  protected:
+    /// The buffer
+    std::shared_ptr<flight::FlightInfo> flight_info_;
+    std::shared_ptr<flight::FlightStreamReader> flight_stream_;
 
-struct AirportFlightStreamReader : public arrow::RecordBatchReader {
-protected:
-  /// The buffer
-  std::shared_ptr<flight::FlightInfo> flight_info_;
-  std::shared_ptr<flight::FlightStreamReader> flight_stream_;
+  public:
+    /// Constructor
+    AirportFlightStreamReader(
+        std::shared_ptr<flight::FlightInfo> flight_info,
+        std::shared_ptr<flight::FlightStreamReader> flight_stream);
 
-//  std::shared_ptr<ArrowIPCStreamBuffer> buffer_;
+    /// Destructor
+    ~AirportFlightStreamReader() = default;
 
-public:
-  /// Constructor
-  AirportFlightStreamReader(
-    std::shared_ptr<flight::FlightInfo> flight_info,
-    std::shared_ptr<flight::FlightStreamReader> flight_stream);
+    /// Get the schema
+    std::shared_ptr<arrow::Schema> schema() const override;
 
-  /// Destructor
-  ~AirportFlightStreamReader() = default;
+    /// Read the next record batch in the stream. Return null for batch when
+    /// reaching end of stream
+    arrow::Status ReadNext(std::shared_ptr<arrow::RecordBatch> *batch) override;
 
-  /// Get the schema
-  std::shared_ptr<arrow::Schema> schema() const override;
+    /// Create arrow array stream wrapper
+    static duckdb::unique_ptr<duckdb::ArrowArrayStreamWrapper>
 
-  /// Read the next record batch in the stream. Return null for batch when
-  /// reaching end of stream
-  arrow::Status ReadNext(std::shared_ptr<arrow::RecordBatch> *batch) override;
+    CreateStream(uintptr_t buffer_ptr, duckdb::ArrowStreamParameters &parameters);
 
-  /// Create arrow array stream wrapper
-  static duckdb::unique_ptr<duckdb::ArrowArrayStreamWrapper>
-
-  CreateStream(uintptr_t buffer_ptr, duckdb::ArrowStreamParameters &parameters);
-
-  /// Create arrow array stream wrapper
-  static void GetSchema(uintptr_t buffer_ptr, duckdb::ArrowSchemaWrapper &schema);
-};
-
+    /// Create arrow array stream wrapper
+    static void GetSchema(uintptr_t buffer_ptr, duckdb::ArrowSchemaWrapper &schema);
+  };
 
 } // namespace duckdb
