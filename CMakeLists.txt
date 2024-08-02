@@ -17,6 +17,7 @@ set(EXTENSION_SOURCES
   src/airport_flight_stream.cpp
   src/airport_json_serializer.cpp
   src/airport_json_common.cpp
+  src/airport_list_flights.cpp
 )
 
 
