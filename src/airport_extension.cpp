@@ -21,7 +21,12 @@
 
 namespace flight = arrow::flight;
 
-#define ARROW_RETURN_IF_(condition, status, _) \
+#define AIRPORT_ARROW_ASSIGN_OR_RAISE(lhs, rexpr)                                              \
+  AIRPORT_ARROW_ASSIGN_OR_RAISE_IMPL(ARROW_ASSIGN_OR_RAISE_NAME(_error_or_value, __COUNTER__), \
+                             lhs, rexpr);
+
+
+#define AIRPORT_ARROW_RETURN_IF_(condition, status, _) \
   do {                                         \
     if (ARROW_PREDICT_FALSE(condition)) {      \
         throw InvalidInputException("airport - Arrow Flight Exception: " + status.message()); \
@@ -29,12 +34,12 @@ namespace flight = arrow::flight;
   } while (0)
 
 
-#define ARROW_ASSIGN_OR_RAISE_IMPL(result_name, lhs, rexpr)                              \
+#define AIRPORT_ARROW_ASSIGN_OR_RAISE_IMPL(result_name, lhs, rexpr)                              \
   auto&& result_name = (rexpr);                                                          \
-  ARROW_RETURN_IF_(!(result_name).ok(), (result_name).status(), ARROW_STRINGIFY(rexpr)); \
+  AIRPORT_ARROW_RETURN_IF_(!(result_name).ok(), (result_name).status(), ARROW_STRINGIFY(rexpr)); \
   lhs = std::move(result_name).ValueUnsafe();
 
-#define ARROW_ASSERT_OK(expr)                                                              \
+#define AIRPORT_ARROW_ASSERT_OK(expr)                                                              \
   for (::arrow::Status _st = ::arrow::internal::GenericToStatus((expr)); !_st.ok();) \
   throw InvalidInputException("airport - Arrow Flight Exception: " + _st.message());
 
@@ -73,7 +78,7 @@ static unique_ptr<FunctionData> take_flight_bind(
 
     // FIXME: make the location variable.
     auto server_location = input.inputs[0].ToString();
-    ARROW_ASSIGN_OR_RAISE(auto location, flight::Location::Parse(server_location));
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location, flight::Location::Parse(server_location));
 
     auto flight_descriptor = input.inputs[1];
 
@@ -121,12 +126,12 @@ static unique_ptr<FunctionData> take_flight_bind(
 
     // To actually get the information about the flight, we need to either call
     // GetFlightInfo or DoGet.
-    ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
 
     // Get the information about the flight, this will allow the
     // endpoint information to be returned.
     std::unique_ptr<arrow::flight::FlightInfo> flight_info;
-    ARROW_ASSIGN_OR_RAISE(flight_info, flight_client->GetFlightInfo(descriptor));
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, flight_client->GetFlightInfo(descriptor));
 
     // After doing a little bit of examination of the DuckDb sources, I learned that
     // that DuckDb supports the "C" interface of Arrow, this means that DuckDB doens't
@@ -144,7 +149,7 @@ static unique_ptr<FunctionData> take_flight_bind(
 
     // Start the stream here on the bind.
     std::unique_ptr<arrow::flight::FlightStreamReader> stream;
-    ARROW_ASSIGN_OR_RAISE(stream, flight_client->DoGet(flight_info->endpoints()[0].ticket));
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(stream, flight_client->DoGet(flight_info->endpoints()[0].ticket));
 
     auto scan_data = make_uniq<AirportTakeFlightScanData>(
         std::move(flight_info),
@@ -173,9 +178,9 @@ static unique_ptr<FunctionData> take_flight_bind(
     // information
     std::shared_ptr<arrow::Schema> info_schema;
     arrow::ipc::DictionaryMemo dictionary_memo;
-    ARROW_ASSIGN_OR_RAISE(info_schema, ret->flight_data->flight_info_->GetSchema(&dictionary_memo));
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, ret->flight_data->flight_info_->GetSchema(&dictionary_memo));
 
-    ARROW_ASSERT_OK(ExportSchema(*info_schema, &data.schema_root.arrow_schema));
+    AIRPORT_ARROW_ASSERT_OK(ExportSchema(*info_schema, &data.schema_root.arrow_schema));
 
     for (idx_t col_idx = 0;
         col_idx < (idx_t)data.schema_root.arrow_schema.n_children; col_idx++) {
@@ -247,10 +252,10 @@ static unique_ptr<FunctionData> list_flights_bind(ClientContext &context, TableF
 
     auto ret = make_uniq<ListFlightsBindData>();
 
-    ARROW_ASSIGN_OR_RAISE(auto location,
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location,
                           flight::Location::Parse(server_location));
 
-    ARROW_ASSIGN_OR_RAISE(ret->flight_client, flight::FlightClient::Connect(location));
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(ret->flight_client, flight::FlightClient::Connect(location));
     ret->criteria = criteria;
 
     // ordered - boolean
@@ -308,11 +313,11 @@ static void list_flights(ClientContext &context, TableFunctionInput &data, DataC
         call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
         printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
 
-        ARROW_ASSIGN_OR_RAISE(global_state.listing, bind_data.flight_client->ListFlights(call_options, {bind_data.criteria}));
+        AIRPORT_ARROW_ASSIGN_OR_RAISE(global_state.listing, bind_data.flight_client->ListFlights(call_options, {bind_data.criteria}));
     }
 
     std::unique_ptr<flight::FlightInfo> flight_info;
-    ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next());
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next());
 
     if(flight_info == nullptr) {
         // There are no more flights to return.
@@ -437,10 +442,10 @@ static void list_flights(ClientContext &context, TableFunctionInput &data, DataC
 
         std::shared_ptr<arrow::Schema> info_schema;
         arrow::ipc::DictionaryMemo dictionary_memo;
-        ARROW_ASSIGN_OR_RAISE(info_schema, flight_info->GetSchema(&dictionary_memo));
+        AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, flight_info->GetSchema(&dictionary_memo));
         FlatVector::GetData<string_t>(output.data[6])[output_row_index] = StringVector::AddStringOrBlob(output.data[6], info_schema->ToString());
 
-        ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next());
+        AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next());
         output_row_index++;
     }
 
