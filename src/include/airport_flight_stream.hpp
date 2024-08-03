@@ -2,7 +2,6 @@
 
 #include "duckdb/common/arrow/arrow_wrapper.hpp"
 #include "duckdb/function/table/arrow.hpp"
-#include "duckdb/planner/table_filter.hpp"
 #include "arrow/ipc/reader.h"
 #include "arrow/record_batch.h"
 #include "arrow/result.h"
@@ -11,14 +10,7 @@
 #include "arrow/type_fwd.h"
 #include "arrow/c/bridge.h"
 
-#include <string>
-#include <unordered_map>
-#include <iostream>
-#include <memory>
-
-#include <arrow/flight/client.h>
-
-#include "duckdb/function/table/arrow.hpp"
+#include "arrow/flight/client.h"
 
 #include "duckdb/function/table/arrow.hpp"
 

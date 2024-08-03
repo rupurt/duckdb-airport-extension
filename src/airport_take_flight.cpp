@@ -1,20 +1,13 @@
 #include "airport_extension.hpp"
 #include "duckdb.hpp"
-#include "duckdb/common/exception.hpp"
-#include "duckdb/common/string_util.hpp"
-#include "duckdb/function/scalar_function.hpp"
-#include "duckdb/main/extension_util.hpp"
-#include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
-
-#include "duckdb/function/table/arrow.hpp"
-
-#include "airport_json_common.hpp"
-#include "airport_json_serializer.hpp"
 
 // Arrow includes.
 #include <arrow/flight/client.h>
-#include <arrow/c/bridge.h>
 
+#include "duckdb/main/extension_util.hpp"
+
+#include "airport_json_common.hpp"
+#include "airport_json_serializer.hpp"
 #include "airport_flight_stream.hpp"
 #include "airport_macros.hpp"
 
@@ -311,7 +304,7 @@ namespace duckdb
       {
         if (col_idx == COLUMN_IDENTIFIER_ROW_ID)
         {
-          result->scanned_types.emplace_back(LogicalType::ROW_TYPE);
+          result->scanned_types.emplace_back(LogicalTypeId::BIGINT);
         }
         else
         {
