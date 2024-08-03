@@ -282,7 +282,7 @@ namespace duckdb
 
     arrow::flight::FlightCallOptions call_options;
     call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
-    printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
+    // printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
     call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
 
     AIRPORT_ARROW_ASSIGN_OR_RAISE(
@@ -326,6 +326,9 @@ namespace duckdb
         ArrowTableFunction::ArrowScanInitLocal);
 
     take_flight_function.pushdown_complex_filter = take_flight_complex_filter_pushdown;
+
+    // Add support for optional named paraemters that would be appended to the descriptor
+    // of the flight, ideally parameters would be JSON encoded.
 
     take_flight_function.cardinality = take_flight_cardinality;
     take_flight_function.get_batch_index = nullptr;
