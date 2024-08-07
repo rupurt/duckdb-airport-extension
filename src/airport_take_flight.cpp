@@ -67,19 +67,36 @@ namespace duckdb
       vector<LogicalType> &return_types,
       vector<string> &names)
   {
+    string auth_token = "";
+
+    for (auto &kv : input.named_parameters)
+    {
+      auto loption = StringUtil::Lower(kv.first);
+      if (loption == "auth_token")
+      {
+        auth_token = StringValue::Get(kv.second);
+      }
+    }
 
     auto server_location = input.inputs[0].ToString();
     AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location, flight::Location::Parse(server_location));
 
     auto descriptor = flight_descriptor_from_value(input.inputs[1]);
 
-    // To actually get the information about the flight, we need to either call
-    // GetFlightInfo or DoGet.
     AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
+
+    arrow::flight::FlightCallOptions call_options;
+    call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
+    if (!auth_token.empty())
+    {
+      std::stringstream ss;
+      ss << "Bearer " << auth_token;
+      call_options.headers.emplace_back("authorization", ss.str());
+    }
 
     // Get the information about the flight, this will allow the
     // endpoint information to be returned.
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_info, flight_client->GetFlightInfo(descriptor));
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_info, flight_client->GetFlightInfo(call_options, descriptor));
 
     // Store the flight info on the bind data.
 
@@ -104,6 +121,7 @@ namespace duckdb
 
     ret->scan_data = std::move(scan_data);
     ret->flight_client = std::move(flight_client);
+    ret->auth_token = auth_token;
 
     auto &data = *ret;
 
@@ -285,6 +303,13 @@ namespace duckdb
     // printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
     call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
 
+    if (!bind_data.auth_token.empty())
+    {
+      std::stringstream ss;
+      ss << "Bearer " << bind_data.auth_token;
+      call_options.headers.emplace_back("authorization", ss.str());
+    }
+
     AIRPORT_ARROW_ASSIGN_OR_RAISE(
         flight_stream,
         bind_data.flight_client->DoGet(
@@ -325,6 +350,7 @@ namespace duckdb
         AirportArrowScanInitGlobal,
         ArrowTableFunction::ArrowScanInitLocal);
 
+    take_flight_function.named_parameters["auth_token"] = LogicalType::VARCHAR;
     take_flight_function.pushdown_complex_filter = take_flight_complex_filter_pushdown;
 
     // Add support for optional named paraemters that would be appended to the descriptor

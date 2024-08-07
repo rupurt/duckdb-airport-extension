@@ -39,6 +39,9 @@ namespace duckdb
     std::unique_ptr<arrow::flight::FlightClient> flight_client = nullptr;
 
     string json_filters;
+
+    // This is the auth token.
+    string auth_token;
   };
 
   struct AirportFlightStreamReader : public arrow::RecordBatchReader

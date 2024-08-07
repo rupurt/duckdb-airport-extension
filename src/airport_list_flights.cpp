@@ -20,6 +20,9 @@ namespace duckdb
     // This is is the location of the server
     string server_location;
 
+    // This is the auth token.
+    string auth_token;
+
     // This is the criteria that will be passed the list flights.
     string criteria;
 
@@ -62,6 +65,18 @@ namespace duckdb
       TableFunctionBindInput &input,
       vector<LogicalType> &return_types, vector<string> &names)
   {
+
+    string auth_token = "";
+
+    for (auto &kv : input.named_parameters)
+    {
+      auto loption = StringUtil::Lower(kv.first);
+      if (loption == "auth_token")
+      {
+        auth_token = StringValue::Get(kv.second);
+      }
+    }
+
     auto server_location = input.inputs[0].ToString();
     string criteria = "";
 
@@ -72,6 +87,7 @@ namespace duckdb
 
     auto ret = make_uniq<ListFlightsBindData>();
     ret->server_location = server_location;
+    ret->auth_token = auth_token;
     ret->criteria = criteria;
 
     // ordered - boolean
@@ -122,6 +138,13 @@ namespace duckdb
       arrow::flight::FlightCallOptions call_options;
       call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
       call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
+
+      if (!bind_data.auth_token.empty())
+      {
+        std::stringstream ss;
+        ss << "Bearer " << bind_data.auth_token;
+        call_options.headers.emplace_back("authorization", ss.str());
+      }
       // printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
 
       AIRPORT_ARROW_ASSIGN_OR_RAISE(global_state.listing, global_state.flight_client_->ListFlights(call_options, {bind_data.criteria}));
@@ -323,6 +346,7 @@ namespace duckdb
         list_flights_bind,
         ListFlightsGlobalState::Init);
 
+    with_criteria.named_parameters["auth_token"] = LogicalType::VARCHAR;
     with_criteria.pushdown_complex_filter = list_flights_complex_filter_pushdown;
     with_criteria.filter_pushdown = false;
     list_flights_functions.AddFunction(with_criteria);
@@ -334,6 +358,7 @@ namespace duckdb
         list_flights_bind,
         ListFlightsGlobalState::Init);
 
+    without_criteria.named_parameters["auth_token"] = LogicalType::VARCHAR;
     without_criteria.pushdown_complex_filter = list_flights_complex_filter_pushdown;
     without_criteria.filter_pushdown = false;
     list_flights_functions.AddFunction(without_criteria);

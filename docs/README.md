@@ -13,7 +13,7 @@ Arrow Flight is an RPC framework for high-performance data services based on [Ap
 
 ### Listing Flights
 
-```airport_list_flights(location, criteria)```
+```airport_list_flights(location, criteria, auth_token="token_value")```
 
 Parameters:
 
@@ -21,6 +21,10 @@ Parameters:
 |----------------|------|-------------|
 | `location` | VARCHAR | This is the location of the Flight server |
 | `criteria` | VARCHAR | This is free form criteria to pass to the Flight server |
+
+Named Parameters:
+
+`auth_token` - a VARCHAR that is used as a bearer token to present to the server, the header is formatted like `Authorization: Bearer <auth_token>`
 
 This function returns a list of Arrow Flights that are available at a particular endpoint.
 
@@ -84,7 +88,7 @@ It is up to the implementer of the GRPC server to use this header to apply optim
 
 ### Taking a Flight
 
-```airport_take_flight(location, descriptor)```
+```airport_take_flight(location, descriptor, auth_token="token_value")```
 
 Parameters:
 
@@ -92,6 +96,11 @@ Parameters:
 |----------------|------|-------------|
 | `location` | VARCHAR | This is the location of the Flight server |
 | `descriptor` | ANY | This is the descriptor of the flight.  If its a VARCHAR or BLOB its interpreted as a command, if its an ARRAY or LIST of VARCHAR its considered a path based descriptor.  |
+
+Named Parameters:
+
+`auth_token` - a VARCHAR that is used as a bearer token to present to the server, the header is formatted like `Authorization: Bearer <auth_token>`
+
 
 ```sql
 select * from airport_take_flight('grpc://localhost:8815/', ['counter-stream']) limit 5;
