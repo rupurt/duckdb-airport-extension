@@ -9,6 +9,7 @@ vcpkg_extract_source_archive(
     ARCHIVE ${ARCHIVE_PATH}
     PATCHES
         align-record-batch.patch
+        compress-flight-schemas.patch
         android.patch
         msvc-static-name.patch
         utf8proc.patch
