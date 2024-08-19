@@ -7,7 +7,7 @@ This extension `airport` enables the use of [Arrow Flight](https://arrow.apache.
 ## What is Arrow Flight?
 
 <img src="https://arrow.apache.org/docs/_static/arrow.png" style="float:right" width="200px" alt="Apache Arrow Logo"/>
-Arrow Flight is an RPC framework for high-performance data services based on [Apache Arrow](https://arrow.apache.org/docs/index.html), and is built on top of [gRPC](https://grpc.io) and the [Arrow IPC format](https://arrow.apache.org/docs/format/IPC.html).
+Arrow Flight is an RPC framework for high-performance data services based on (Apache Arrow)[https://arrow.apache.org/docs/index.html], and is built on top of (gRPC)[https://grpc.io] and the (Arrow IPC format)[https://arrow.apache.org/docs/format/IPC.html].
 
 ## API
 
@@ -20,7 +20,7 @@ Parameters:
 | Parameter Name | Type | Description |
 |----------------|------|-------------|
 | `location` | VARCHAR | This is the location of the Flight server |
-| `criteria` | VARCHAR | This is free form criteria to pass to the Flight server |
+| `criteria` | VARCHAR | This is free-form criteria to pass to the Flight server |
 
 Named Parameters:
 
@@ -40,9 +40,11 @@ flight_descriptor = [uploaded.parquet]
            schema = Character: string
 ```
 
-In addition to the `criteria` parameter, the Airport extension will pass a GRPC header
-that contains a JSON serialized representation of all of the filters that are applied to
-the results.
+In addition to the `criteria` parameter, the Airport extension will pass additional GRPC headers.
+
+#### Serializing Filters
+
+The `airport-duckdb-json-filters` header is sent on the GRPC requests.  The header contains a JSON serialized representation of all of the conditional filters that are going applied to the results.
 
 To illustrate this through an example:
 
@@ -82,9 +84,13 @@ The GRPC header `airport-duckdb-json-filters` will be set to
 }
 ```
 
-The GRPC header will not contain newlines, but the JSON has been reformatted for ease of comprehension.
+The `airport-duckdb-json-filters` header will not contain newlines, but the JSON has been reformatted in this document for ease of comprehension.
 
-It is up to the implementer of the GRPC server to use this header to apply optimizations.  The Airport DuckDB extension will still apply the filters to the result returned by the server. This means that the filter logic is purely advisory.  If Arrow Flight servers implement the filtering logic server side it can unlock some impressive optimizations.  The JSON schema of the serialized filter expressions is not guaranteed to remain unchanged across DuckDB versions.
+It is up to the implementer of the server to use this header to apply optimizations.  The Airport DuckDB extension will still apply the filters to the result returned by the server. This means that the filter logic is purely advisory.  In the author's experience, if Arrow Flight servers implement the filtering logic server side it can unlock some impressive optimizations.  The JSON schema of the serialized filter expressions is not guaranteed to remain unchanged across DuckDB versions, the serialization is performed by the DuckDB code.
+
+#### Projection Optimization
+
+The header `airport-duckdb-column-ids` will contain a comma-separated list of column indexes that are used in the query.  The Arrow Flight server can return nulls for columns that are not requested.  This can be used to reduce the amount of data that is transmitted in the response.
 
 ### Taking a Flight
 
@@ -94,12 +100,12 @@ Parameters:
 
 | Parameter Name | Type | Description |
 |----------------|------|-------------|
-| `location` | VARCHAR | This is the location of the Flight server |
-| `descriptor` | ANY | This is the descriptor of the flight.  If its a VARCHAR or BLOB its interpreted as a command, if its an ARRAY or LIST of VARCHAR its considered a path based descriptor.  |
+| `location` | `VARCHAR` | This is the location of the Flight server |
+| `descriptor` | `ANY` | This is the descriptor of the flight.  If it is a `VARCHAR` or `BLOB` it is interpreted as a command, if it is an `ARRAY` or `VARCHAR[]` it is considered a path-based descriptor.  |
 
 Named Parameters:
 
-`auth_token` - a VARCHAR that is used as a bearer token to present to the server, the header is formatted like `Authorization: Bearer <auth_token>`
+`auth_token` - a `VARCHAR` that is used as a bearer token to present to the server, the header is formatted like `Authorization: Bearer <auth_token>`
 
 
 ```sql
@@ -120,14 +126,20 @@ select * from airport_take_flight('grpc://localhost:8815/', ['counter-stream']) 
 
 ### TODO
 
-1. Authorization Support
-2. Integration with the DuckDB catalog.
-3. Ingestigate the multithreaded endpoint support.
-4. Write support?  How to do updates of rows against tables?
+1. Integration with the DuckDB catalog.
+2. Investigate the multithreaded endpoint support.
+3. Write support?  How to do updates of rows against tables?
+
+
+## Implementation Notes
+
+### Compression of FlightDescriptors
+
+In the Arrow Flight protocol specification, the schema of Flight is sent uncompressed when flights are listed.  When a server has many flights, this can cause the response size of listing flights to be quite large.  A change was made to the Arrow Flight protocol to compress these schemas with ZStandard to reduce the amount of bytes transmitted.
 
 ### Memory Alignment of Apache Arrow Buffers
 
-This extension applied a change to the C interface of Apache Arrow that enforces 8 byte alignment of the column data.  DuckDB requires that this alignment is present, where Apache Arrow and Arrow Flight do not require this.
+This extension applied a change to the C interface of Apache Arrow that enforces the 8-byte alignment of the column data.  DuckDB requires that this alignment is present, Apache Arrow and Arrow Flight do not require this.
 
 If other extensions use Apache Arrow please ensure that the patch `align-record-batch.patch` is applied from `vcpkg-overlay/arrow`.
 

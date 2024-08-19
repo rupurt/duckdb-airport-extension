@@ -289,6 +289,23 @@ namespace duckdb
     return function.scanner_producer(function.stream_factory_ptr, parameters);
   }
 
+  std::string join_vector(const std::vector<idx_t> &vec)
+  {
+    if (vec.empty())
+      return "";
+
+    std::ostringstream oss;
+    auto it = vec.begin();
+    oss << *it; // Add the first element
+
+    for (++it; it != vec.end(); ++it)
+    {
+      oss << ',' << *it;
+    }
+
+    return oss.str();
+  }
+
   static unique_ptr<GlobalTableFunctionState> AirportArrowScanInitGlobal(ClientContext &context,
                                                                          TableFunctionInitInput &input)
   {
@@ -302,6 +319,9 @@ namespace duckdb
     call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
     // printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
     call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
+
+    auto joined_column_ids = join_vector(input.column_ids);
+    call_options.headers.emplace_back("airport-duckdb-column-ids", joined_column_ids);
 
     if (!bind_data.auth_token.empty())
     {
