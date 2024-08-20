@@ -144,39 +144,47 @@ This extension applied a change to the C interface of Apache Arrow that enforces
 
 If other extensions use Apache Arrow please ensure that the patch `align-record-batch.patch` is applied from `vcpkg-overlay/arrow`.
 
-## Building
-### Managing dependencies
-
-The airport extension utilizes VCPKG for dependency management. Enabling VCPKG is very simple: follow the [installation instructions](https://vcpkg.io/en/getting-started) or just run the following:
+## Building the extension
 
 ```shell
+# Clone this repo with submodules.
+# duckdb and extension-ci-tools are submodules.
+git clone --recursive git@github.com:rustyconover/duckdb-airport-extension.git
+
+# Clone the vcpkg repo
 git clone https://github.com/Microsoft/vcpkg.git
+
+# Bootstrap vcpkg
 ./vcpkg/bootstrap-vcpkg.sh
 export VCPKG_TOOLCHAIN_PATH=`pwd`/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+# Build the extension
+make
+
+# If you have ninja installed, you can use it to speed up the build
+# GEN=ninja make
 ```
 
-### Build steps
-Now to build the extension, run:
-```sh
-make
-```
 The main binaries that will be built are:
 ```sh
 ./build/release/duckdb
 ./build/release/test/unittest
 ./build/release/extension/airport/airport.duckdb_extension
 ```
+
 - `duckdb` is the binary for the duckdb shell with the extension code automatically loaded.
 - `unittest` is the test runner of duckdb. Again, the extension is already linked into the binary.
 - `airport.duckdb_extension` is the loadable binary as it would be distributed.
 
 ## Running the extension
-To run the extension code, simply start the shell with `./build/release/duckdb`. This shell will have the extension pre-loaded.
+
+To run the extension code, simply start the shell with `./build/release/duckdb`. This duckdb shell will have the extension pre-loaded.
 
 Now we can use the features from the extension directly in DuckDB.
 
 ## Running the tests
 Different tests can be created for DuckDB extensions. The primary way of testing DuckDB extensions should be the SQL tests in `./test/sql`. These SQL tests can be run using:
+
 ```sh
 make test
 ```
