@@ -96,13 +96,13 @@ namespace duckdb
     // metadata - bytes
 
     child_list_t<LogicalType> flight_descriptor_members = {
-        {"cmd", LogicalType::BLOB},
-        {"path", LogicalType::LIST(LogicalType::VARCHAR)}};
+        {"cmd", LogicalTypeId::BLOB},
+        {"path", LogicalType::LIST(LogicalTypeId::VARCHAR)}};
 
-    auto endpoint_type = LogicalType::STRUCT({{"ticket", LogicalType::BLOB},
-                                              {"location", LogicalType::LIST(LogicalType::VARCHAR)},
-                                              {"expiration_time", LogicalType::TIMESTAMP},
-                                              {"app_metadata", LogicalType::BLOB}});
+    auto endpoint_type = LogicalType::STRUCT({{"ticket", LogicalTypeId::BLOB},
+                                              {"location", LogicalType::LIST(LogicalTypeId::VARCHAR)},
+                                              {"expiration_time", LogicalTypeId::TIMESTAMP},
+                                              {"app_metadata", LogicalTypeId::BLOB}});
 
     std::initializer_list<duckdb::LogicalType> table_types = {
         LogicalType::UNION(flight_descriptor_members),
@@ -170,7 +170,7 @@ namespace duckdb
     auto descriptor_path_data = ListVector::GetData(*descriptor_entries[2]);
     auto endpoint_data = ListVector::GetData(output.data[1]);
 
-    int output_row_index = 0;
+    unsigned int output_row_index = 0;
     while (flight_info != nullptr && output_row_index < max_rows)
     {
       auto descriptor = flight_info->descriptor();
