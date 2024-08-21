@@ -86,7 +86,7 @@ namespace duckdb
     AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
 
     arrow::flight::FlightCallOptions call_options;
-    call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
+    call_options.headers.emplace_back("airport-user-agent", "airport/20240820-01");
     if (!auth_token.empty())
     {
       std::stringstream ss;

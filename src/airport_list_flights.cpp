@@ -136,7 +136,7 @@ namespace duckdb
     {
       // Now send a list flights request.
       arrow::flight::FlightCallOptions call_options;
-      call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
+      call_options.headers.emplace_back("airport-user-agent", "duckdb-airport/0.0.1");
       call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
 
       if (!bind_data.auth_token.empty())
