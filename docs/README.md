@@ -10,11 +10,13 @@ This extension `airport` enables the use of [Arrow Flight](https://arrow.apache.
 
 Arrow Flight is an RPC framework for high-performance data services based on [Apache Arrow](https://arrow.apache.org/docs/index.html) and is built on top of [gRPC](https://grpc.io) and the [Arrow IPC format](https://arrow.apache.org/docs/format/IPC.html).
 
+
+
 ## API
 
 ### Listing Flights
 
-```airport_list_flights(location, criteria, auth_token="token_value")```
+```airport_list_flights(location, criteria, auth_token="token_value", secret="secret_name")```
 
 Parameters:
 
@@ -26,6 +28,9 @@ Parameters:
 Named Parameters:
 
 `auth_token` - a VARCHAR that is used as a bearer token to present to the server, the header is formatted like `Authorization: Bearer <auth_token>`
+`secret` - a VARCHAR that contains the name of the [DuckDB secret](https://duckdb.org/docs/configuration/secrets_manager.html) to use to supply the value for the `auth_token`.
+
+```sql
 
 This function returns a list of Arrow Flights that are available at a particular endpoint.
 
@@ -95,7 +100,7 @@ The header `airport-duckdb-column-ids` will contain a comma-separated list of co
 
 ### Taking a Flight
 
-```airport_take_flight(location, descriptor, auth_token="token_value")```
+```airport_take_flight(location, descriptor, auth_token="token_value", secret="secret_name")```
 
 Parameters:
 
@@ -104,9 +109,11 @@ Parameters:
 | `location` | `VARCHAR` | This is the location of the Flight server |
 | `descriptor` | `ANY` | This is the descriptor of the flight.  If it is a `VARCHAR` or `BLOB` it is interpreted as a command, if it is an `ARRAY` or `VARCHAR[]` it is considered a path-based descriptor.  |
 
+
 Named Parameters:
 
 `auth_token` - a `VARCHAR` that is used as a bearer token to present to the server, the header is formatted like `Authorization: Bearer <auth_token>`
+`secret` - a VARCHAR that contains the name of the [DuckDB secret](https://duckdb.org/docs/configuration/secrets_manager.html) to use to supply the value for the `auth_token`.
 
 
 ```sql
@@ -122,6 +129,18 @@ select * from airport_take_flight('grpc://localhost:8815/', ['counter-stream']) 
 │       4 │
 └─────────┘
 ```
+
+### Creating a secret
+
+To create a secret that can be used by `airport_take_flight` and `airport_list_flight` use the standard DuckDB `CREATE SECRET` command.
+
+```sql
+create secret airport_hello_world (type airport, token 'test-token', scope 'grpc+tls://server.example.com/');
+```
+
+The Airport extension respects the scope(s) specified in the secret.  If a value for `auth_token` isn't supplied, but a secret exists with a scope that matches the server location the value for the `auth_token` will be used from the secret.
+
+```sql
 
 ## Implementation Notes
 
