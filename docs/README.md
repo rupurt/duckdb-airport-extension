@@ -140,7 +140,6 @@ create secret airport_hello_world (type airport, token 'test-token', scope 'grpc
 
 The Airport extension respects the scope(s) specified in the secret.  If a value for `auth_token` isn't supplied, but a secret exists with a scope that matches the server location the value for the `auth_token` will be used from the secret.
 
-```sql
 
 ## Implementation Notes
 
