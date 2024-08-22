@@ -6,9 +6,12 @@
 #include <arrow/flight/client.h>
 #include "duckdb/main/extension_util.hpp"
 
+#include "duckdb/main/secret/secret_manager.hpp"
+
 #include "airport_json_common.hpp"
 #include "airport_json_serializer.hpp"
 #include "airport_macros.hpp"
+#include "airport_secrets.hpp"
 
 namespace flight = arrow::flight;
 
@@ -65,8 +68,15 @@ namespace duckdb
       TableFunctionBindInput &input,
       vector<LogicalType> &return_types, vector<string> &names)
   {
+    auto server_location = input.inputs[0].ToString();
+    string criteria = "";
+    if (input.inputs.size() > 1)
+    {
+      criteria = input.inputs[1].ToString();
+    }
 
     string auth_token = "";
+    string secret_name = "";
 
     for (auto &kv : input.named_parameters)
     {
@@ -75,14 +85,44 @@ namespace duckdb
       {
         auth_token = StringValue::Get(kv.second);
       }
+      else if (loption == "secret")
+      {
+        secret_name = StringValue::Get(kv.second);
+      }
     }
 
-    auto server_location = input.inputs[0].ToString();
-    string criteria = "";
-
-    if (input.inputs.size() > 1)
+    if (!secret_name.empty())
     {
-      criteria = input.inputs[1].ToString();
+      auto secret_entry = AirportGetSecretByName(context, secret_name);
+      if (secret_entry)
+      {
+        const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+
+        if (auth_token.empty())
+        {
+          Value input_val = kv_secret.TryGetValue("token");
+          auth_token = input_val.IsNull() ? "" : input_val.ToString();
+        }
+      }
+      else
+      {
+        throw BinderException("Secret with name \"%s\" not found", secret_name);
+      }
+    }
+    else
+    {
+      // See if there is a secret scoped to the path of the server location that will provide a token.
+      auto secret_match = AirportGetSecretByPath(context, server_location);
+      if (secret_match.HasMatch())
+      {
+        const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_match.secret_entry->secret);
+
+        if (auth_token.empty())
+        {
+          Value input_val = kv_secret.TryGetValue("token");
+          auth_token = input_val.IsNull() ? "" : input_val.ToString();
+        }
+      }
     }
 
     auto ret = make_uniq<ListFlightsBindData>();
@@ -136,7 +176,7 @@ namespace duckdb
     {
       // Now send a list flights request.
       arrow::flight::FlightCallOptions call_options;
-      call_options.headers.emplace_back("airport-user-agent", "duckdb-airport/0.0.1");
+      call_options.headers.emplace_back("airport-user-agent", "airport/20240820-01");
       call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
 
       if (!bind_data.auth_token.empty())
@@ -347,6 +387,8 @@ namespace duckdb
         ListFlightsGlobalState::Init);
 
     with_criteria.named_parameters["auth_token"] = LogicalType::VARCHAR;
+    with_criteria.named_parameters["secret"] = LogicalType::VARCHAR;
+
     with_criteria.pushdown_complex_filter = list_flights_complex_filter_pushdown;
     with_criteria.filter_pushdown = false;
     list_flights_functions.AddFunction(with_criteria);
@@ -359,6 +401,7 @@ namespace duckdb
         ListFlightsGlobalState::Init);
 
     without_criteria.named_parameters["auth_token"] = LogicalType::VARCHAR;
+    without_criteria.named_parameters["secret"] = LogicalType::VARCHAR;
     without_criteria.pushdown_complex_filter = list_flights_complex_filter_pushdown;
     without_criteria.filter_pushdown = false;
     list_flights_functions.AddFunction(without_criteria);

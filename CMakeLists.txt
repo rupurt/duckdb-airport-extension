@@ -19,6 +19,7 @@ set(EXTENSION_SOURCES
   src/airport_json_common.cpp
   src/airport_list_flights.cpp
   src/airport_take_flight.cpp
+  src/airport_secrets.cpp
 )
 
 

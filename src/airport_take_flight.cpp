@@ -5,11 +5,13 @@
 #include <arrow/flight/client.h>
 
 #include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
 
 #include "airport_json_common.hpp"
 #include "airport_json_serializer.hpp"
 #include "airport_flight_stream.hpp"
 #include "airport_macros.hpp"
+#include "airport_secrets.hpp"
 
 namespace flight = arrow::flight;
 
@@ -67,7 +69,11 @@ namespace duckdb
       vector<LogicalType> &return_types,
       vector<string> &names)
   {
+    auto server_location = input.inputs[0].ToString();
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location, flight::Location::Parse(server_location));
+
     string auth_token = "";
+    string secret_name = "";
 
     for (auto &kv : input.named_parameters)
     {
@@ -76,10 +82,45 @@ namespace duckdb
       {
         auth_token = StringValue::Get(kv.second);
       }
+      else if (loption == "secret")
+      {
+        secret_name = StringValue::Get(kv.second);
+      }
     }
 
-    auto server_location = input.inputs[0].ToString();
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location, flight::Location::Parse(server_location));
+    if (!secret_name.empty())
+    {
+      auto secret_entry = AirportGetSecretByName(context, secret_name);
+      if (secret_entry)
+      {
+        const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+
+        if (auth_token.empty())
+        {
+          Value input_val = kv_secret.TryGetValue("token");
+          auth_token = input_val.IsNull() ? "" : input_val.ToString();
+        }
+      }
+      else
+      {
+        throw BinderException("Secret with name \"%s\" not found", secret_name);
+      }
+    }
+    else
+    {
+      // See if there is a secret scoped to the path of the server location that will provide a token.
+      auto secret_match = AirportGetSecretByPath(context, server_location);
+      if (secret_match.HasMatch())
+      {
+        const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_match.secret_entry->secret);
+
+        if (auth_token.empty())
+        {
+          Value input_val = kv_secret.TryGetValue("token");
+          auth_token = input_val.IsNull() ? "" : input_val.ToString();
+        }
+      }
+    }
 
     auto descriptor = flight_descriptor_from_value(input.inputs[1]);
 
@@ -371,6 +412,8 @@ namespace duckdb
         ArrowTableFunction::ArrowScanInitLocal);
 
     take_flight_function.named_parameters["auth_token"] = LogicalType::VARCHAR;
+    take_flight_function.named_parameters["secret"] = LogicalType::VARCHAR;
+
     take_flight_function.pushdown_complex_filter = take_flight_complex_filter_pushdown;
 
     // Add support for optional named paraemters that would be appended to the descriptor
