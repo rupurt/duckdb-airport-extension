@@ -63,81 +63,65 @@ namespace duckdb
     }
   }
 
-  static unique_ptr<FunctionData> take_flight_bind(
-      ClientContext &context,
-      TableFunctionBindInput &input,
-      vector<LogicalType> &return_types,
-      vector<string> &names)
+  struct TakeFlightParameters
   {
-    auto server_location = input.inputs[0].ToString();
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location, flight::Location::Parse(server_location));
+    string server_location;
+    string auth_token;
+    string secret_name;
+  };
 
-    string auth_token = "";
-    string secret_name = "";
+  static TakeFlightParameters ParseTakeFlightParameters(
+      string &server_location,
+      ClientContext &context,
+      TableFunctionBindInput &input)
+  {
+    TakeFlightParameters params;
+
+    params.server_location = server_location;
 
     for (auto &kv : input.named_parameters)
     {
       auto loption = StringUtil::Lower(kv.first);
       if (loption == "auth_token")
       {
-        auth_token = StringValue::Get(kv.second);
+        params.auth_token = StringValue::Get(kv.second);
       }
       else if (loption == "secret")
       {
-        secret_name = StringValue::Get(kv.second);
+        params.secret_name = StringValue::Get(kv.second);
       }
     }
 
-    if (!secret_name.empty())
-    {
-      auto secret_entry = AirportGetSecretByName(context, secret_name);
-      if (secret_entry)
-      {
-        const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+    params.auth_token = AirportAuthTokenForLocation(context, params.server_location, params.secret_name, params.auth_token);
+    return params;
+  }
 
-        if (auth_token.empty())
-        {
-          Value input_val = kv_secret.TryGetValue("token");
-          auth_token = input_val.IsNull() ? "" : input_val.ToString();
-        }
-      }
-      else
-      {
-        throw BinderException("Secret with name \"%s\" not found", secret_name);
-      }
-    }
-    else
-    {
-      // See if there is a secret scoped to the path of the server location that will provide a token.
-      auto secret_match = AirportGetSecretByPath(context, server_location);
-      if (secret_match.HasMatch())
-      {
-        const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_match.secret_entry->secret);
+  static unique_ptr<FunctionData> take_flight_bind_with_descriptor(
+      TakeFlightParameters &take_flight_params,
+      flight::FlightDescriptor &descriptor,
+      ClientContext &context,
+      TableFunctionBindInput &input,
+      vector<LogicalType> &return_types,
+      vector<string> &names)
+  {
 
-        if (auth_token.empty())
-        {
-          Value input_val = kv_secret.TryGetValue("token");
-          auth_token = input_val.IsNull() ? "" : input_val.ToString();
-        }
-      }
-    }
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location, flight::Location::Parse(take_flight_params.server_location), "()");
 
-    auto descriptor = flight_descriptor_from_value(input.inputs[1]);
-
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
+    auto error_location = "(" + take_flight_params.server_location + ")";
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location), error_location);
 
     arrow::flight::FlightCallOptions call_options;
-    call_options.headers.emplace_back("airport-user-agent", "airport/20240820-01");
-    if (!auth_token.empty())
+    call_options.headers.emplace_back("airport-user-agent", AIRPORT_USER_AGENT);
+    if (!take_flight_params.auth_token.empty())
     {
       std::stringstream ss;
-      ss << "Bearer " << auth_token;
+      ss << "Bearer " << take_flight_params.auth_token;
       call_options.headers.emplace_back("authorization", ss.str());
     }
 
     // Get the information about the flight, this will allow the
     // endpoint information to be returned.
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_info, flight_client->GetFlightInfo(call_options, descriptor));
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_info, flight_client->GetFlightInfo(call_options, descriptor), error_location);
 
     // Store the flight info on the bind data.
 
@@ -162,7 +146,8 @@ namespace duckdb
 
     ret->scan_data = std::move(scan_data);
     ret->flight_client = std::move(flight_client);
-    ret->auth_token = auth_token;
+    ret->auth_token = take_flight_params.auth_token;
+    ret->server_location = take_flight_params.server_location;
 
     auto &data = *ret;
 
@@ -170,9 +155,9 @@ namespace duckdb
     // information
     std::shared_ptr<arrow::Schema> info_schema;
     arrow::ipc::DictionaryMemo dictionary_memo;
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, ret->scan_data->flight_info_->GetSchema(&dictionary_memo));
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, ret->scan_data->flight_info_->GetSchema(&dictionary_memo), error_location);
 
-    AIRPORT_ARROW_ASSERT_OK(ExportSchema(*info_schema, &data.schema_root.arrow_schema));
+    AIRPORT_ARROW_ASSERT_OK(ExportSchema(*info_schema, &data.schema_root.arrow_schema), error_location);
 
     for (idx_t col_idx = 0;
          col_idx < (idx_t)data.schema_root.arrow_schema.n_children; col_idx++)
@@ -204,6 +189,47 @@ namespace duckdb
     }
     QueryResult::DeduplicateColumns(names);
     return std::move(ret);
+  }
+
+  static unique_ptr<FunctionData> take_flight_bind(
+      ClientContext &context,
+      TableFunctionBindInput &input,
+      vector<LogicalType> &return_types,
+      vector<string> &names)
+  {
+    auto server_location = input.inputs[0].ToString();
+    auto params = ParseTakeFlightParameters(server_location, context, input);
+    auto descriptor = flight_descriptor_from_value(input.inputs[1]);
+
+    return take_flight_bind_with_descriptor(
+        params,
+        descriptor,
+        context,
+        input, return_types, names);
+  }
+
+  static unique_ptr<FunctionData> take_flight_bind_with_pointer(
+      ClientContext &context,
+      TableFunctionBindInput &input,
+      vector<LogicalType> &return_types,
+      vector<string> &names)
+  {
+    auto server_location = input.inputs[0].ToString();
+    auto params = ParseTakeFlightParameters(server_location, context, input);
+
+    if (input.inputs[1].IsNull())
+    {
+      throw BinderException("take_flight_with_pointer: pointers to flight descriptor cannot be null");
+    }
+    auto descriptor = *reinterpret_cast<flight::FlightDescriptor *>(input.inputs[1].GetPointer());
+
+    return take_flight_bind_with_descriptor(
+        params,
+        descriptor,
+        context,
+        input,
+        return_types,
+        names);
   }
 
   static void take_flight(ClientContext &context, TableFunctionInput &data_p, DataChunk &output)
@@ -375,7 +401,8 @@ namespace duckdb
         flight_stream,
         bind_data.flight_client->DoGet(
             call_options,
-            bind_data.scan_data->flight_info_->endpoints()[0].ticket));
+            bind_data.scan_data->flight_info_->endpoints()[0].ticket),
+        "(" + bind_data.server_location + ")");
 
     bind_data.scan_data->stream_ = std::move(flight_stream);
 
@@ -403,7 +430,10 @@ namespace duckdb
 
   void AddTakeFlightFunction(DatabaseInstance &instance)
   {
-    auto take_flight_function = TableFunction(
+
+    auto take_flight_function_set = TableFunctionSet("airport_take_flight");
+
+    auto take_flight_function_with_descriptor = TableFunction(
         "airport_take_flight",
         {LogicalType::VARCHAR, LogicalType::ANY},
         take_flight,
@@ -411,19 +441,40 @@ namespace duckdb
         AirportArrowScanInitGlobal,
         ArrowTableFunction::ArrowScanInitLocal);
 
-    take_flight_function.named_parameters["auth_token"] = LogicalType::VARCHAR;
-    take_flight_function.named_parameters["secret"] = LogicalType::VARCHAR;
-
-    take_flight_function.pushdown_complex_filter = take_flight_complex_filter_pushdown;
+    take_flight_function_with_descriptor.named_parameters["auth_token"] = LogicalType::VARCHAR;
+    take_flight_function_with_descriptor.named_parameters["secret"] = LogicalType::VARCHAR;
+    take_flight_function_with_descriptor.pushdown_complex_filter = take_flight_complex_filter_pushdown;
 
     // Add support for optional named paraemters that would be appended to the descriptor
     // of the flight, ideally parameters would be JSON encoded.
 
-    take_flight_function.cardinality = take_flight_cardinality;
-    take_flight_function.get_batch_index = nullptr;
-    take_flight_function.projection_pushdown = true;
-    take_flight_function.filter_pushdown = false;
+    take_flight_function_with_descriptor.cardinality = take_flight_cardinality;
+    take_flight_function_with_descriptor.get_batch_index = nullptr;
+    take_flight_function_with_descriptor.projection_pushdown = true;
+    take_flight_function_with_descriptor.filter_pushdown = false;
+    take_flight_function_set.AddFunction(take_flight_function_with_descriptor);
 
-    ExtensionUtil::RegisterFunction(instance, take_flight_function);
+    auto take_flight_function_with_pointer = TableFunction(
+        "airport_take_flight",
+        {LogicalType::VARCHAR, LogicalType::POINTER},
+        take_flight,
+        take_flight_bind_with_pointer,
+        AirportArrowScanInitGlobal,
+        ArrowTableFunction::ArrowScanInitLocal);
+
+    take_flight_function_with_pointer.named_parameters["auth_token"] = LogicalType::VARCHAR;
+    take_flight_function_with_pointer.named_parameters["secret"] = LogicalType::VARCHAR;
+    take_flight_function_with_pointer.pushdown_complex_filter = take_flight_complex_filter_pushdown;
+
+    // Add support for optional named paraemters that would be appended to the descriptor
+    // of the flight, ideally parameters would be JSON encoded.
+
+    take_flight_function_with_pointer.cardinality = take_flight_cardinality;
+    take_flight_function_with_pointer.get_batch_index = nullptr;
+    take_flight_function_with_pointer.projection_pushdown = true;
+    take_flight_function_with_pointer.filter_pushdown = false;
+    take_flight_function_set.AddFunction(take_flight_function_with_pointer);
+
+    ExtensionUtil::RegisterFunction(instance, take_flight_function_set);
   }
 }

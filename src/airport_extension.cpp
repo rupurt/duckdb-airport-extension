@@ -5,6 +5,13 @@
 #include "duckdb/main/extension_util.hpp"
 
 #include "duckdb/main/secret/secret_manager.hpp"
+#include "duckdb/parser/parsed_data/attach_info.hpp"
+#include "duckdb/storage/storage_extension.hpp"
+
+#include "storage/airport_catalog.hpp"
+#include "storage/airport_transaction_manager.hpp"
+#include "airport_secrets.hpp"
+#include <curl/curl.h>
 
 namespace duckdb
 {
@@ -25,9 +32,9 @@ namespace duckdb
         {
             auto lower_name = StringUtil::Lower(named_param.first);
 
-            if (lower_name == "token")
+            if (lower_name == "auth_token")
             {
-                result->secret_map["token"] = named_param.second.ToString();
+                result->secret_map["auth_token"] = named_param.second.ToString();
             }
             else
             {
@@ -36,18 +43,78 @@ namespace duckdb
         }
 
         //! Set redact keys
-        result->redact_keys = {"token"};
+        result->redact_keys = {"auth_token"};
 
         return std::move(result);
     }
 
     static void SetAirportSecretParameters(CreateSecretFunction &function)
     {
-        function.named_parameters["token"] = LogicalType::VARCHAR;
+        function.named_parameters["auth_token"] = LogicalType::VARCHAR;
     }
+
+    static unique_ptr<Catalog> AirportCatalogAttach(StorageExtensionInfo *storage_info, ClientContext &context,
+                                                    AttachedDatabase &db, const string &name, AttachInfo &info,
+                                                    AccessMode access_mode)
+    {
+        AirportCredentials credentials;
+
+        // check if we have a secret provided
+        for (auto &entry : info.options)
+        {
+            auto lower_name = StringUtil::Lower(entry.first);
+            if (lower_name == "type")
+            {
+                continue;
+            }
+            else if (lower_name == "secret")
+            {
+                credentials.secret_name = entry.second.ToString();
+            }
+            else if (lower_name == "auth_token")
+            {
+                credentials.auth_token = entry.second.ToString();
+            }
+            else if (lower_name == "location")
+            {
+                credentials.location = entry.second.ToString();
+            }
+            else
+            {
+                throw BinderException("Unrecognized option for Airport ATTACH: %s", entry.first);
+            }
+        }
+
+        credentials.auth_token = AirportAuthTokenForLocation(context, credentials.location, credentials.secret_name, credentials.auth_token);
+
+        if (credentials.location.empty())
+        {
+            throw BinderException("No location provided for Airport ATTACH.");
+        }
+
+        return make_uniq<AirportCatalog>(db, info.path, access_mode, credentials);
+    }
+
+    static unique_ptr<TransactionManager> CreateTransactionManager(StorageExtensionInfo *storage_info, AttachedDatabase &db,
+                                                                   Catalog &catalog)
+    {
+        auto &airport_catalog = catalog.Cast<AirportCatalog>();
+        return make_uniq<AirportTransactionManager>(db, airport_catalog);
+    }
+
+    class AirportCatalogStorageExtension : public StorageExtension
+    {
+    public:
+        AirportCatalogStorageExtension()
+        {
+            attach = AirportCatalogAttach;
+            create_transaction_manager = CreateTransactionManager;
+        }
+    };
 
     static void LoadInternal(DatabaseInstance &instance)
     {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
 
         // We could add some parameter here for authentication
         // and extra headers.
@@ -65,6 +132,9 @@ namespace duckdb
         CreateSecretFunction airport_secret_function = {"airport", "config", CreateAirportSecretFunction};
         SetAirportSecretParameters(airport_secret_function);
         ExtensionUtil::RegisterFunction(instance, airport_secret_function);
+
+        auto &config = DBConfig::GetConfig(instance);
+        config.storage_extensions["airport"] = make_uniq<AirportCatalogStorageExtension>();
     }
 
     void AirportExtension::Load(DuckDB &db)

@@ -2,6 +2,8 @@
 
 #include "duckdb.hpp"
 
+#define AIRPORT_USER_AGENT "airport/20240820-01"
+
 namespace duckdb
 {
 

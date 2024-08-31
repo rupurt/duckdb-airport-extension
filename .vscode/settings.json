@@ -1,4 +1,21 @@
 {
+  "files.exclude": {
+    "vcpkg/downloads": true,
+    "vcpkg/packages": true,
+    "vcpkg/ports": true,
+    "vcpkg/scripts": true,
+    "vcpkg/toolsrc": true,
+    "vcpkg/versions": true,
+    "vcpkg/triplets": true,
+    "build/**": true,
+    ".tmp/**": true,
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/CVS": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true
+  },
   "cmake.environment": {
     "GEN": "ninja",
     "VCPKG_TOOLCHAIN_PATH": "${workspaceFolder}/vcpkg/scripts/buildsystems/vcpkg.cmake",
@@ -25,6 +42,29 @@
   "peacock.color": "#2f7769",
   "files.associations": {
     "optional": "cpp",
-    "*.inc": "cpp"
+    "*.inc": "cpp",
+    "__hash_table": "cpp",
+    "__split_buffer": "cpp",
+    "__tree": "cpp",
+    "array": "cpp",
+    "bitset": "cpp",
+    "deque": "cpp",
+    "hash_map": "cpp",
+    "initializer_list": "cpp",
+    "list": "cpp",
+    "map": "cpp",
+    "queue": "cpp",
+    "regex": "cpp",
+    "set": "cpp",
+    "span": "cpp",
+    "stack": "cpp",
+    "string": "cpp",
+    "string_view": "cpp",
+    "unordered_map": "cpp",
+    "unordered_set": "cpp",
+    "valarray": "cpp",
+    "vector": "cpp",
+    "*.ipp": "cpp",
+    "stdexcept": "cpp"
   }
 }

@@ -29,7 +29,7 @@ namespace duckdb
   {
     std::shared_ptr<arrow::Schema> info_schema;
     arrow::ipc::DictionaryMemo dictionary_memo;
-    AIRPORT_ASSIGN_OR_RAISE(info_schema, flight_info_->GetSchema(&dictionary_memo));
+    AIRPORT_ASSIGN_OR_RAISE(info_schema, flight_info_->GetSchema(&dictionary_memo), "(" + flight_info_->descriptor().ToString() + ")");
     return info_schema;
   }
 
@@ -38,7 +38,7 @@ namespace duckdb
   arrow::Status AirportFlightStreamReader::ReadNext(
       std::shared_ptr<arrow::RecordBatch> *batch)
   {
-    AIRPORT_ASSIGN_OR_RAISE(auto chunk, flight_stream_.get()->Next());
+    AIRPORT_ASSIGN_OR_RAISE(auto chunk, flight_stream_.get()->Next(), "(" + flight_info_->descriptor().ToString() + ")");
     if (!chunk.data)
     {
       // End of the stream has been reached.
@@ -65,7 +65,7 @@ namespace duckdb
     // If this doesn't work I can re-implement the ArrowArrayStreamWrapper
     // to take a FlightStreamReader instead of a RecordBatchReader.
 
-    AIRPORT_ASSIGN_OR_RAISE(auto reader, flight::MakeRecordBatchReader(buffer_data->stream_));
+    AIRPORT_ASSIGN_OR_RAISE(auto reader, flight::MakeRecordBatchReader(buffer_data->stream_), "(" + buffer_data->flight_info_->descriptor().ToString() + ")");
 
     // Create arrow stream
     auto stream_wrapper = duckdb::make_uniq<duckdb::ArrowArrayStreamWrapper>();
@@ -97,8 +97,8 @@ namespace duckdb
 
     std::shared_ptr<arrow::Schema> info_schema;
     arrow::ipc::DictionaryMemo dictionary_memo;
-    AIRPORT_ASSIGN_OR_RAISE(info_schema, reader->get()->flight_info_->GetSchema(&dictionary_memo));
+    AIRPORT_ASSIGN_OR_RAISE(info_schema, reader->get()->flight_info_->GetSchema(&dictionary_memo), "(" + reader->get()->flight_info_->descriptor().ToString() + ")");
 
-    AIRPORT_ASSERT_OK(ExportSchema(*info_schema, &schema.arrow_schema));
+    AIRPORT_ASSERT_OK(ExportSchema(*info_schema, &schema.arrow_schema), "(" + reader->get()->flight_info_->descriptor().ToString() + ")");
   }
 } // namespace duckdb

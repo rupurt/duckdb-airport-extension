@@ -55,9 +55,9 @@ namespace duckdb
       auto &bind_data = input.bind_data->Cast<ListFlightsBindData>();
 
       AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location,
-                                    flight::Location::Parse(bind_data.server_location));
+                                    flight::Location::Parse(bind_data.server_location), "()");
 
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location));
+      AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location), "(" + bind_data.server_location + ")");
 
       return make_uniq<ListFlightsGlobalState>(std::move(flight_client));
     }
@@ -91,39 +91,7 @@ namespace duckdb
       }
     }
 
-    if (!secret_name.empty())
-    {
-      auto secret_entry = AirportGetSecretByName(context, secret_name);
-      if (secret_entry)
-      {
-        const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-
-        if (auth_token.empty())
-        {
-          Value input_val = kv_secret.TryGetValue("token");
-          auth_token = input_val.IsNull() ? "" : input_val.ToString();
-        }
-      }
-      else
-      {
-        throw BinderException("Secret with name \"%s\" not found", secret_name);
-      }
-    }
-    else
-    {
-      // See if there is a secret scoped to the path of the server location that will provide a token.
-      auto secret_match = AirportGetSecretByPath(context, server_location);
-      if (secret_match.HasMatch())
-      {
-        const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_match.secret_entry->secret);
-
-        if (auth_token.empty())
-        {
-          Value input_val = kv_secret.TryGetValue("token");
-          auth_token = input_val.IsNull() ? "" : input_val.ToString();
-        }
-      }
-    }
+    auth_token = AirportAuthTokenForLocation(context, server_location, secret_name, auth_token);
 
     auto ret = make_uniq<ListFlightsBindData>();
     ret->server_location = server_location;
@@ -172,11 +140,13 @@ namespace duckdb
     auto &bind_data = data.bind_data->Cast<ListFlightsBindData>();
     auto &global_state = data.global_state->Cast<ListFlightsGlobalState>();
 
+    string server_location = "(" + bind_data.server_location + ")";
+
     if (global_state.listing == nullptr)
     {
       // Now send a list flights request.
       arrow::flight::FlightCallOptions call_options;
-      call_options.headers.emplace_back("airport-user-agent", "airport/20240820-01");
+      call_options.headers.emplace_back("airport-user-agent", AIRPORT_USER_AGENT);
       call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
 
       if (!bind_data.auth_token.empty())
@@ -187,11 +157,11 @@ namespace duckdb
       }
       // printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
 
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(global_state.listing, global_state.flight_client_->ListFlights(call_options, {bind_data.criteria}));
+      AIRPORT_ARROW_ASSIGN_OR_RAISE(global_state.listing, global_state.flight_client_->ListFlights(call_options, {bind_data.criteria}), server_location);
     }
 
     std::unique_ptr<flight::FlightInfo> flight_info;
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next());
+    AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next(), server_location);
 
     if (flight_info == nullptr)
     {
@@ -322,10 +292,10 @@ namespace duckdb
 
       std::shared_ptr<arrow::Schema> info_schema;
       arrow::ipc::DictionaryMemo dictionary_memo;
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, flight_info->GetSchema(&dictionary_memo));
+      AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, flight_info->GetSchema(&dictionary_memo), server_location);
       FlatVector::GetData<string_t>(output.data[6])[output_row_index] = StringVector::AddStringOrBlob(output.data[6], info_schema->ToString());
 
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next());
+      AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next(), server_location);
       output_row_index++;
     }
 

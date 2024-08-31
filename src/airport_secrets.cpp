@@ -33,4 +33,46 @@ namespace duckdb
     return secret_manager.LookupSecret(transaction, path, "airport");
   }
 
+  string AirportAuthTokenForLocation(ClientContext &context, string &server_location, const string &secret_name, const string &auth_token)
+  {
+    if (!auth_token.empty())
+    {
+      return auth_token;
+    }
+
+    if (!secret_name.empty())
+    {
+      auto secret_entry = AirportGetSecretByName(context, secret_name);
+      if (!secret_entry)
+      {
+        throw BinderException("Secret with name \"%s\" not found", secret_name);
+      }
+
+      const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+
+      if (auth_token.empty())
+      {
+        Value input_val = kv_secret.TryGetValue("auth_token");
+        if (!input_val.IsNull())
+        {
+          return input_val.ToString();
+        }
+        return "";
+      }
+    }
+
+    auto secret_match = AirportGetSecretByPath(context, server_location);
+    if (secret_match.HasMatch())
+    {
+      const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_match.secret_entry->secret);
+
+      Value input_val = kv_secret.TryGetValue("auth_token");
+      if (!input_val.IsNull())
+      {
+        return input_val.ToString();
+      }
+      return "";
+    }
+    return "";
+  }
 }

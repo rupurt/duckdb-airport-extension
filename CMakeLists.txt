@@ -8,6 +8,8 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 find_package(Arrow REQUIRED)
 find_package(ArrowFlight REQUIRED)
+find_package(CURL REQUIRED)
+
 
 project(${TARGET_NAME})
 include_directories(src/include)
@@ -20,6 +22,19 @@ set(EXTENSION_SOURCES
   src/airport_list_flights.cpp
   src/airport_take_flight.cpp
   src/airport_secrets.cpp
+
+
+  src/storage/airport_catalog_api.cpp
+  src/storage/airport_catalog_set.cpp
+  src/storage/airport_catalog.cpp
+  src/storage/airport_clear_cache.cpp
+  src/storage/airport_schema_entry.cpp
+  src/storage/airport_schema_set.cpp
+  src/storage/airport_table_entry.cpp
+  src/storage/airport_table_set.cpp
+  src/storage/airport_transaction_manager.cpp
+  src/storage/airport_transaction.cpp
+  src/storage/airport_curl_pool.cpp
 )
 
 
@@ -32,9 +47,12 @@ target_link_libraries(${EXTENSION_NAME}
   Arrow::arrow_static
   ArrowFlight::arrow_flight_static
   gRPC::grpc++
+  CURL::libcurl
+  OpenSSL::SSL
+  OpenSSL::Crypto
 )
 
-#target_link_libraries(${LOADABLE_TARGET_NAME} PRIVATE Arrow::arrow_shared ArrowFlight::arrow_flight_shared)
+#target_link_libraries(${LOADABLE_TARGET_NAME} PRIVATE Arrow::arrow_shared ArrowFlight::arrow_flight_shared CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
 
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
