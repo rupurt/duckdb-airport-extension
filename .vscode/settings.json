@@ -65,6 +65,7 @@
     "valarray": "cpp",
     "vector": "cpp",
     "*.ipp": "cpp",
-    "stdexcept": "cpp"
+    "stdexcept": "cpp",
+    "iomanip": "cpp"
   }
 }

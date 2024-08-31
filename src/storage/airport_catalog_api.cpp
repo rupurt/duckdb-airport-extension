@@ -1,12 +1,7 @@
 #include <openssl/evp.h>
 #include <openssl/sha.h>
-#include <filesystem>
-#include <fstream>
 #include <iomanip>
-#include <iostream>
 #include <random>
-#include <sstream>
-#include <string>
 #include <string_view>
 #include <vector>
 #include <openssl/sha.h>
@@ -19,13 +14,14 @@
 #include "storage/airport_catalog_api.hpp"
 #include "storage/airport_catalog.hpp"
 
+#include "duckdb/common/file_system.hpp"
+
 #include "airport_macros.hpp"
 #include "airport_secrets.hpp"
 #include "airport_extension.hpp"
 #include <curl/curl.h>
 
 namespace flight = arrow::flight;
-namespace fs = std::filesystem;
 using namespace duckdb_yyjson; // NOLINT
 
 namespace duckdb
@@ -44,54 +40,45 @@ namespace duckdb
     return result;
   }
 
-  static void writeToTempFile(const fs::path &tempFilename, const std::string_view &data)
+  static void writeToTempFile(std::unique_ptr<FileSystem> &fs, const string &tempFilename, const std::string_view &data)
   {
-    std::ofstream file(tempFilename, std::ios::binary);
-    if (file)
-    {
-      file.write(data.data(), data.size());
-    }
-    else
+    auto handle = fs->OpenFile(tempFilename, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW);
+    if (!handle)
     {
       throw IOException("Airport: Failed to open file for writing: %s", tempFilename.c_str());
     }
+
+    handle->Write((void *)data.data(), data.size());
+    handle->Sync();
+    handle->Close();
   }
 
-  static void renameFile(const fs::path &oldFilename, const fs::path &newFilename)
-  {
-    std::error_code ec;
-    fs::rename(oldFilename, newFilename, ec);
-    if (ec)
-    {
-      throw IOException("Airport: Failed to rename file: %s", ec.message());
-    }
-  }
-
-  static fs::path generateTempFilename(const fs::path &dir)
+  static string generateTempFilename(std::unique_ptr<FileSystem> &fs, const string &dir)
   {
     static std::random_device rd;
     static std::mt19937 gen(rd());
     static std::uniform_int_distribution<> dis(0, 999999);
 
-    fs::path tempFilename;
+    string filename;
+
     do
     {
-      tempFilename = dir / ("temp_" + std::to_string(dis(gen)) + ".tmp");
-    } while (fs::exists(tempFilename));
-
-    return tempFilename;
+      filename = fs->JoinPath(dir, "temp_" + std::to_string(dis(gen)) + ".tmp");
+    } while (fs->FileExists(filename));
+    return filename;
   }
 
-  static std::string readFromFile(const fs::path &filename)
+  static std::string readFromFile(std::unique_ptr<FileSystem> &fs, const string &filename)
   {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file)
+    auto handle = fs->OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+    if (!handle)
     {
       return "";
     }
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    return buffer.str();
+    auto file_size = handle->GetFileSize();
+    string read_buffer = string(file_size, '\0');
+    handle->Read((void *)read_buffer.data(), file_size);
+    return read_buffer;
   }
 
   static string TryGetStrFromObject(yyjson_val *obj, const string &field, bool optional = false)
@@ -224,10 +211,13 @@ namespace duckdb
     throw InternalException("Failed to initialize curl");
   }
 
-  static std::pair<fs::path, fs::path> GetCachePath(const string &input, const string &baseDir)
+  static std::pair<const string, const string> GetCachePath(std::unique_ptr<FileSystem> &fs, const string &input, const string &baseDir)
   {
-    fs::path cacheDir = fs::path(baseDir) / "airport_cache"; // Use "cache" subdirectory
-    fs::create_directories(cacheDir);                        // Create directory if it doesn't exist
+    auto cacheDir = fs->JoinPath(baseDir, "airport_cache");
+    if (!fs->DirectoryExists(cacheDir))
+    {
+      fs->CreateDirectory(cacheDir);
+    }
 
     if (input.size() < 6)
     {
@@ -237,22 +227,21 @@ namespace duckdb
     auto subDirName = input.substr(0, 3); // First 3 characters for subdirectory
     auto fileName = input.substr(3);      // Remaining characters for filename
 
-    fs::path subDir = cacheDir / subDirName;
-    fs::create_directories(subDir); // Create subdirectory if it doesn't exist
+    auto subDir = fs->JoinPath(cacheDir, subDirName);
+    if (!fs->DirectoryExists(subDir))
+    {
+      fs->CreateDirectory(subDir);
+    }
 
-    return std::make_pair(subDir, subDir / fileName);
-  }
-
-  static bool fileExists(const fs::path &filePath)
-  {
-    return fs::exists(filePath) && fs::is_regular_file(filePath);
+    return std::make_pair(subDir, fs->JoinPath(subDir, fileName));
   }
 
   void AirportAPI::PopulateURLCacheUsingContainerURL(CURL *curl, const string &url, const string &expected_sha256, const string &baseDir)
   {
-    auto sentinel_paths = GetCachePath(expected_sha256, baseDir);
+    auto fs = FileSystem::CreateLocal();
+    auto sentinel_paths = GetCachePath(fs, expected_sha256, baseDir);
 
-    if (fileExists(sentinel_paths.second))
+    if (fs->FileExists(sentinel_paths.second))
     {
       // The cache has already been populated.
       return;
@@ -302,23 +291,23 @@ namespace duckdb
         throw IOException("SHA256 mismatch from URL: %s for sha256=%s, check for cache corruption", url, sha256_value.c_str());
       }
 
-      auto paths = GetCachePath(sha256_value, baseDir);
-      const fs::path subDir = paths.first;
-      const fs::path finalFilename = paths.second;
+      auto paths = GetCachePath(fs, sha256_value, baseDir);
+      //      const fs::path subDir = paths.first;
+      //      const fs::path finalFilename = paths.second;
 
-      fs::path tempFilename = generateTempFilename(subDir);
-      writeToTempFile(tempFilename, data_value);
+      auto tempFilename = generateTempFilename(fs, paths.first);
+      writeToTempFile(fs, tempFilename, data_value);
 
       // Rename the temporary file to the final filename
-      renameFile(tempFilename, finalFilename);
+      fs->MoveFile(tempFilename, paths.second);
     }
 
     // Write a file that the cache has been populated.
-    writeToTempFile(sentinel_paths.second, "1");
+    writeToTempFile(fs, sentinel_paths.second, "1");
   }
 
   // Function to handle caching
-  static std::pair<long, std::string> getCachedRequestData(CURL *curl, const string &url, const string &expected_sha256, const fs::path &baseDir)
+  static std::pair<long, std::string> getCachedRequestData(CURL *curl, const string &url, const string &expected_sha256, const string &baseDir)
   {
     if (expected_sha256.empty())
     {
@@ -326,20 +315,23 @@ namespace duckdb
       // and the caching is based on the sha256 values.
       return GetRequest(curl, url, expected_sha256);
     }
-    auto paths = GetCachePath(expected_sha256, baseDir);
 
-    const fs::path subDir = paths.first;
-    const fs::path finalFilename = paths.second;
+    auto fs = FileSystem::CreateLocal();
+
+    auto paths = GetCachePath(fs, expected_sha256, baseDir);
+
+    //    const fs::path subDir = paths.first;
+    //    const fs::path finalFilename = paths.second;
 
     // Check if data is in cache
-    std::string cachedData = readFromFile(finalFilename);
+    std::string cachedData = readFromFile(fs, paths.second);
     if (!cachedData.empty())
     {
       // Verify that the SHA256 matches the returned data, don't allow a corrupted filesystem
       // to affect things.
       if (!expected_sha256.empty() && SHA256ForString(cachedData) != expected_sha256)
       {
-        throw IOException("SHA256 mismatch for URL: %s from cached data at %s, check for cache corruption", url, finalFilename.c_str());
+        throw IOException("SHA256 mismatch for URL: %s from cached data at %s, check for cache corruption", url, paths.second.c_str());
       }
       // printf("Got disk cache hit for %s\n", url.c_str());
       return std::make_pair(200, cachedData);
@@ -356,12 +348,12 @@ namespace duckdb
     }
 
     // Save the fetched data to a temporary file
-    fs::path tempFilename = generateTempFilename(subDir);
+    auto tempFilename = generateTempFilename(fs, paths.first);
     auto content = std::string_view(get_result.second.data(), get_result.second.size());
-    writeToTempFile(tempFilename, content);
+    writeToTempFile(fs, tempFilename, content);
 
     // Rename the temporary file to the final filename
-    renameFile(tempFilename, finalFilename);
+    fs->MoveFile(tempFilename, paths.second);
 
     // printf("Disk cache miss for %s\n", url.c_str());
 

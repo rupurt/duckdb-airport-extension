@@ -32,6 +32,7 @@ namespace duckdb
   unique_ptr<BaseStatistics> AirportTableEntry::GetStatistics(ClientContext &context, column_t column_id)
   {
     // TODO: Rusty implement this from the flight server.
+    // printf("Getting column statistics for column %d\n", column_id);
     return nullptr;
   }
 
@@ -56,39 +57,19 @@ namespace duckdb
 
     vector<Value> inputs = {table_data->location, Value::POINTER((uintptr_t)&table_data->flight_info->descriptor())};
 
-    // if (table_data->storage_location.find("file://") != 0)
-    // {
-    //   auto &secret_manager = SecretManager::Get(context);
-    //   // Get Credentials from AirportAPI
-    //   auto table_credentials = AirportAPI::GetTableCredentials(table_data->table_id, airport_catalog.credentials);
-
-    //   // Inject secret into secret manager scoped to this path
-    //   CreateSecretInfo info(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
-    //   info.name = "__internal_uc_" + table_data->table_id;
-    //   info.type = "s3";
-    //   info.provider = "config";
-    //   info.options = {
-    //       {"key_id", table_credentials.key_id},
-    //       {"secret", table_credentials.secret},
-    //       {"session_token", table_credentials.session_token},
-    //       {"region", airport_catalog.credentials.aws_region},
-    //   };
-    //   info.scope = {table_data->storage_location};
-    //   secret_manager.CreateSecret(context, info);
-    // }
     named_parameter_map_t param_map;
     vector<LogicalType> return_types;
     vector<string> names;
     TableFunctionRef empty_ref;
 
     TableFunctionBindInput bind_input(inputs,
-    param_map,
-    return_types,
-    names,
-    nullptr,
-    nullptr,
-    airport_take_flight_function,
-    empty_ref);
+                                      param_map,
+                                      return_types,
+                                      names,
+                                      nullptr,
+                                      nullptr,
+                                      airport_take_flight_function,
+                                      empty_ref);
 
     auto result = airport_take_flight_function.bind(context, bind_input, return_types, names);
     bind_data = std::move(result);
