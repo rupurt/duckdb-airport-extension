@@ -27,6 +27,11 @@ using namespace duckdb_yyjson; // NOLINT
 namespace duckdb
 {
 
+  static constexpr idx_t FILE_FLAGS_READ = idx_t(1 << 0);
+  static constexpr idx_t FILE_FLAGS_WRITE = idx_t(1 << 1);
+  static constexpr idx_t FILE_FLAGS_FILE_CREATE = idx_t(1 << 3);
+  static constexpr idx_t FILE_FLAGS_FILE_CREATE_NEW = idx_t(1 << 4);
+
   inline static uint32_t ExtractU32FromString(std::string_view str)
   {
     if (str.size() < 4)
@@ -40,9 +45,9 @@ namespace duckdb
     return result;
   }
 
-  static void writeToTempFile(std::unique_ptr<FileSystem> &fs, const string &tempFilename, const std::string_view &data)
+  static void writeToTempFile(FileSystem &fs, const string &tempFilename, const std::string_view &data)
   {
-    auto handle = fs->OpenFile(tempFilename, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW);
+    auto handle = fs.OpenFile(tempFilename, FILE_FLAGS_WRITE | FILE_FLAGS_FILE_CREATE_NEW);
     if (!handle)
     {
       throw IOException("Airport: Failed to open file for writing: %s", tempFilename.c_str());
@@ -53,7 +58,7 @@ namespace duckdb
     handle->Close();
   }
 
-  static string generateTempFilename(std::unique_ptr<FileSystem> &fs, const string &dir)
+  static string generateTempFilename(FileSystem &fs, const string &dir)
   {
     static std::random_device rd;
     static std::mt19937 gen(rd());
@@ -63,14 +68,14 @@ namespace duckdb
 
     do
     {
-      filename = fs->JoinPath(dir, "temp_" + std::to_string(dis(gen)) + ".tmp");
-    } while (fs->FileExists(filename));
+      filename = fs.JoinPath(dir, "temp_" + std::to_string(dis(gen)) + ".tmp");
+    } while (fs.FileExists(filename));
     return filename;
   }
 
-  static std::string readFromFile(std::unique_ptr<FileSystem> &fs, const string &filename)
+  static std::string readFromFile(FileSystem &fs, const string &filename)
   {
-    auto handle = fs->OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+    auto handle = fs.OpenFile(filename, FILE_FLAGS_READ);
     if (!handle)
     {
       return "";
@@ -187,12 +192,12 @@ namespace duckdb
       if (res != CURLcode::CURLE_OK)
       {
         string error = curl_easy_strerror(res);
-        throw IOException("Curl Request to '%s' failed with error: '%s'", url, error);
+        throw IOException("Curl Request to " + url + " failed with error: " + error);
       }
       // Get the HTTP response code
       curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
 
-      if (http_code != 200 or expected_sha256.empty())
+      if (http_code != 200 || expected_sha256.empty())
       {
         return std::make_pair(http_code, readBuffer);
       }
@@ -204,19 +209,19 @@ namespace duckdb
 
       if (encountered_sha256 != expected_sha256)
       {
-        throw IOException("SHA256 mismatch for URL: %s", url);
+        throw IOException("SHA256 mismatch for URL: " + url);
       }
       return std::make_pair(http_code, readBuffer);
     }
     throw InternalException("Failed to initialize curl");
   }
 
-  static std::pair<const string, const string> GetCachePath(std::unique_ptr<FileSystem> &fs, const string &input, const string &baseDir)
+  static std::pair<const string, const string> GetCachePath(FileSystem &fs, const string &input, const string &baseDir)
   {
-    auto cacheDir = fs->JoinPath(baseDir, "airport_cache");
-    if (!fs->DirectoryExists(cacheDir))
+    auto cacheDir = fs.JoinPath(baseDir, "airport_cache");
+    if (!fs.DirectoryExists(cacheDir))
     {
-      fs->CreateDirectory(cacheDir);
+      fs.CreateDirectory(cacheDir);
     }
 
     if (input.size() < 6)
@@ -227,19 +232,19 @@ namespace duckdb
     auto subDirName = input.substr(0, 3); // First 3 characters for subdirectory
     auto fileName = input.substr(3);      // Remaining characters for filename
 
-    auto subDir = fs->JoinPath(cacheDir, subDirName);
-    if (!fs->DirectoryExists(subDir))
+    auto subDir = fs.JoinPath(cacheDir, subDirName);
+    if (!fs.DirectoryExists(subDir))
     {
-      fs->CreateDirectory(subDir);
+      fs.CreateDirectory(subDir);
     }
 
-    return std::make_pair(subDir, fs->JoinPath(subDir, fileName));
+    return std::make_pair(subDir, fs.JoinPath(subDir, fileName));
   }
 
   void AirportAPI::PopulateURLCacheUsingContainerURL(CURL *curl, const string &url, const string &expected_sha256, const string &baseDir)
   {
     auto fs = FileSystem::CreateLocal();
-    auto sentinel_paths = GetCachePath(fs, expected_sha256, baseDir);
+    auto sentinel_paths = GetCachePath(*fs, expected_sha256, baseDir);
 
     if (fs->FileExists(sentinel_paths.second))
     {
@@ -291,19 +296,19 @@ namespace duckdb
         throw IOException("SHA256 mismatch from URL: %s for sha256=%s, check for cache corruption", url, sha256_value.c_str());
       }
 
-      auto paths = GetCachePath(fs, sha256_value, baseDir);
+      auto paths = GetCachePath(*fs, sha256_value, baseDir);
       //      const fs::path subDir = paths.first;
       //      const fs::path finalFilename = paths.second;
 
-      auto tempFilename = generateTempFilename(fs, paths.first);
-      writeToTempFile(fs, tempFilename, data_value);
+      auto tempFilename = generateTempFilename(*fs, paths.first);
+      writeToTempFile(*fs, tempFilename, data_value);
 
       // Rename the temporary file to the final filename
       fs->MoveFile(tempFilename, paths.second);
     }
 
     // Write a file that the cache has been populated.
-    writeToTempFile(fs, sentinel_paths.second, "1");
+    writeToTempFile(*fs, sentinel_paths.second, "1");
   }
 
   // Function to handle caching
@@ -318,13 +323,13 @@ namespace duckdb
 
     auto fs = FileSystem::CreateLocal();
 
-    auto paths = GetCachePath(fs, expected_sha256, baseDir);
+    auto paths = GetCachePath(*fs, expected_sha256, baseDir);
 
     //    const fs::path subDir = paths.first;
     //    const fs::path finalFilename = paths.second;
 
     // Check if data is in cache
-    std::string cachedData = readFromFile(fs, paths.second);
+    std::string cachedData = readFromFile(*fs, paths.second);
     if (!cachedData.empty())
     {
       // Verify that the SHA256 matches the returned data, don't allow a corrupted filesystem
@@ -348,9 +353,9 @@ namespace duckdb
     }
 
     // Save the fetched data to a temporary file
-    auto tempFilename = generateTempFilename(fs, paths.first);
+    auto tempFilename = generateTempFilename(*fs, paths.first);
     auto content = std::string_view(get_result.second.data(), get_result.second.size());
-    writeToTempFile(fs, tempFilename, content);
+    writeToTempFile(*fs, tempFilename, content);
 
     // Rename the temporary file to the final filename
     fs->MoveFile(tempFilename, paths.second);
