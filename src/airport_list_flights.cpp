@@ -54,10 +54,10 @@ namespace duckdb
     {
       auto &bind_data = input.bind_data->Cast<ListFlightsBindData>();
 
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location,
-                                    flight::Location::Parse(bind_data.server_location), "()");
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto location,
+                                              flight::Location::Parse(bind_data.server_location), bind_data.server_location, "");
 
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location), "(" + bind_data.server_location + ")");
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto flight_client, flight::FlightClient::Connect(location), bind_data.server_location, "");
 
       return make_uniq<ListFlightsGlobalState>(std::move(flight_client));
     }
@@ -140,8 +140,6 @@ namespace duckdb
     auto &bind_data = data.bind_data->Cast<ListFlightsBindData>();
     auto &global_state = data.global_state->Cast<ListFlightsGlobalState>();
 
-    string server_location = "(" + bind_data.server_location + ")";
-
     if (global_state.listing == nullptr)
     {
       // Now send a list flights request.
@@ -157,11 +155,11 @@ namespace duckdb
       }
       // printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
 
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(global_state.listing, global_state.flight_client_->ListFlights(call_options, {bind_data.criteria}), server_location);
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(global_state.listing, global_state.flight_client_->ListFlights(call_options, {bind_data.criteria}), bind_data.server_location, "");
     }
 
     std::unique_ptr<flight::FlightInfo> flight_info;
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next(), server_location);
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(flight_info, global_state.listing->Next(), bind_data.server_location, "");
 
     if (flight_info == nullptr)
     {
@@ -292,10 +290,10 @@ namespace duckdb
 
       std::shared_ptr<arrow::Schema> info_schema;
       arrow::ipc::DictionaryMemo dictionary_memo;
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, flight_info->GetSchema(&dictionary_memo), server_location);
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(info_schema, flight_info->GetSchema(&dictionary_memo), bind_data.server_location, descriptor, "");
       FlatVector::GetData<string_t>(output.data[6])[output_row_index] = StringVector::AddStringOrBlob(output.data[6], info_schema->ToString());
 
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, global_state.listing->Next(), server_location);
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(flight_info, global_state.listing->Next(), bind_data.server_location, "");
       output_row_index++;
     }
 

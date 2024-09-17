@@ -3,17 +3,19 @@
 
 // Arrow includes.
 #include <arrow/flight/client.h>
+#include <arrow/flight/types.h>
+#include <arrow/buffer.h>
 
 #include "duckdb/main/extension_util.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
+#include "duckdb/planner/operator/logical_get.hpp"
 
 #include "airport_json_common.hpp"
 #include "airport_json_serializer.hpp"
 #include "airport_flight_stream.hpp"
 #include "airport_macros.hpp"
 #include "airport_secrets.hpp"
-
-namespace flight = arrow::flight;
+#include "airport_exception.hpp"
 
 namespace duckdb
 {
@@ -105,10 +107,16 @@ namespace duckdb
       vector<string> &names)
   {
 
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto location, flight::Location::Parse(take_flight_params.server_location), "()");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto location, flight::Location::Parse(take_flight_params.server_location),
+                                                       take_flight_params.server_location,
+                                                       descriptor,
+                                                       "");
 
-    auto error_location = "(" + take_flight_params.server_location + ")";
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_client, flight::FlightClient::Connect(location), error_location);
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto flight_client,
+                                                       flight::FlightClient::Connect(location),
+                                                       take_flight_params.server_location,
+                                                       descriptor,
+                                                       "");
 
     arrow::flight::FlightCallOptions call_options;
     call_options.headers.emplace_back("airport-user-agent", AIRPORT_USER_AGENT);
@@ -121,7 +129,11 @@ namespace duckdb
 
     // Get the information about the flight, this will allow the
     // endpoint information to be returned.
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto flight_info, flight_client->GetFlightInfo(call_options, descriptor), error_location);
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto flight_info,
+                                                       flight_client->GetFlightInfo(call_options, descriptor),
+                                                       take_flight_params.server_location,
+                                                       descriptor,
+                                                       "");
 
     // Store the flight info on the bind data.
 
@@ -137,6 +149,7 @@ namespace duckdb
     // consume.
 
     auto scan_data = make_uniq<AirportTakeFlightScanData>(
+        take_flight_params.server_location,
         std::move(flight_info),
         nullptr);
 
@@ -155,9 +168,13 @@ namespace duckdb
     // information
     std::shared_ptr<arrow::Schema> info_schema;
     arrow::ipc::DictionaryMemo dictionary_memo;
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, ret->scan_data->flight_info_->GetSchema(&dictionary_memo), error_location);
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(info_schema,
+                                                       ret->scan_data->flight_info_->GetSchema(&dictionary_memo),
+                                                       take_flight_params.server_location,
+                                                       descriptor,
+                                                       "");
 
-    AIRPORT_ARROW_ASSERT_OK(ExportSchema(*info_schema, &data.schema_root.arrow_schema), error_location);
+    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(ExportSchema(*info_schema, &data.schema_root.arrow_schema), take_flight_params.server_location, descriptor, "ExportSchema");
 
     for (idx_t col_idx = 0;
          col_idx < (idx_t)data.schema_root.arrow_schema.n_children; col_idx++)
@@ -219,7 +236,7 @@ namespace duckdb
 
     if (input.inputs[1].IsNull())
     {
-      throw BinderException("take_flight_with_pointer: pointers to flight descriptor cannot be null");
+      throw BinderException("airport: take_flight_with_pointer, pointers to flight descriptor cannot be null");
     }
     auto descriptor = *reinterpret_cast<flight::FlightDescriptor *>(input.inputs[1].GetPointer());
 
@@ -292,7 +309,7 @@ namespace duckdb
     {
       return make_uniq<NodeStatistics>(flight_estimated_records);
     }
-    return make_uniq<NodeStatistics>();
+    return make_uniq<NodeStatistics>(100000);
   }
 
   static void take_flight_complex_filter_pushdown(ClientContext &context, LogicalGet &get, FunctionData *bind_data_p,
@@ -310,12 +327,19 @@ namespace duckdb
 
     for (auto &f : filters)
     {
-      auto serializer = AirportJsonSerializer(doc, true, true, true);
+      auto serializer = AirportJsonSerializer(doc, false, false, false);
       f->Serialize(serializer);
       yyjson_mut_arr_append(filters_arr, serializer.GetRootObject());
     }
 
+    yyjson_mut_val *column_id_names = yyjson_mut_arr(doc);
+    for (auto id : get.GetColumnIds())
+    {
+      yyjson_mut_arr_add_str(doc, column_id_names, get.names[id].c_str());
+    }
+
     yyjson_mut_obj_add_val(doc, result_obj, "filters", filters_arr);
+    yyjson_mut_obj_add_val(doc, result_obj, "column_binding_names_by_index", column_id_names);
     idx_t len;
     auto data = yyjson_mut_val_write_opts(
         result_obj,
@@ -353,6 +377,36 @@ namespace duckdb
       }
     }
     parameters.filters = filters;
+
+    if (filters)
+    {
+      auto allocator = AirportJSONAllocator(Allocator::DefaultAllocator());
+      auto alc = allocator.GetYYAlc();
+
+      auto doc = AirportJSONCommon::CreateDocument(alc);
+      auto result_obj = yyjson_mut_obj(doc);
+      yyjson_mut_doc_set_root(doc, result_obj);
+      auto filters_arr = yyjson_mut_arr(doc);
+
+      auto serializer = AirportJsonSerializer(doc, true, true, true);
+      filters->Serialize(serializer);
+      yyjson_mut_arr_append(filters_arr, serializer.GetRootObject());
+
+      idx_t len;
+      auto data = yyjson_mut_val_write_opts(
+          result_obj,
+          AirportJSONCommon::WRITE_FLAG,
+          alc, reinterpret_cast<size_t *>(&len), nullptr);
+
+      if (data == nullptr)
+      {
+        throw SerializationException(
+            "Failed to serialize json, perhaps the query contains invalid utf8 characters?");
+      }
+
+      auto json_result = string(data, (size_t)len);
+    }
+
     return function.scanner_producer(function.stream_factory_ptr, parameters);
   }
 
@@ -373,6 +427,61 @@ namespace duckdb
     return oss.str();
   }
 
+  static string CompressString(const string &input, const string &location, const flight::FlightDescriptor &descriptor)
+  {
+    auto codec = arrow::util::Codec::Create(arrow::Compression::ZSTD, 1).ValueOrDie();
+
+    // Estimate the maximum compressed size (usually larger than original size)
+    int64_t max_compressed_len = codec->MaxCompressedLen(input.size(), reinterpret_cast<const uint8_t *>(input.data()));
+
+    // Allocate a buffer to hold the compressed data
+
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto compressed_buffer, arrow::AllocateBuffer(max_compressed_len), location, descriptor, "");
+
+    // Perform the compression
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto compressed_size,
+                                                       codec->Compress(
+                                                           input.size(),
+                                                           reinterpret_cast<const uint8_t *>(input.data()),
+                                                           max_compressed_len,
+                                                           compressed_buffer->mutable_data()),
+                                                       location, descriptor, "");
+
+    // If you want to write the compressed data to a string
+    std::string compressed_str(reinterpret_cast<const char *>(compressed_buffer->data()), compressed_size);
+    return compressed_str;
+  }
+
+  static string BuildDynamicTicketData(const string &json_filters, const string &column_ids, uint32_t *uncompressed_length, const string &location, const flight::FlightDescriptor &descriptor)
+  {
+    yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);
+    yyjson_mut_val *root = yyjson_mut_obj(doc);
+    yyjson_mut_doc_set_root(doc, root);
+
+    // Add key-value pairs to the JSON object
+    if (!json_filters.empty())
+    {
+      yyjson_mut_obj_add_str(doc, root, "airport-duckdb-json-filters", json_filters.c_str());
+    }
+    if (!column_ids.empty())
+    {
+      yyjson_mut_obj_add_str(doc, root, "airport-duckdb-column-ids", column_ids.c_str());
+    }
+
+    // Serialize the JSON document to a string
+    char *metadata_str = yyjson_mut_write(doc, 0, nullptr);
+
+    auto metadata_doc_string = string(metadata_str);
+
+    *uncompressed_length = metadata_doc_string.size();
+
+    auto compressed_metadata = CompressString(metadata_doc_string, location, descriptor);
+    free(metadata_str);
+    yyjson_mut_doc_free(doc);
+
+    return compressed_metadata;
+  }
+
   static unique_ptr<GlobalTableFunctionState> AirportArrowScanInitGlobal(ClientContext &context,
                                                                          TableFunctionInitInput &input)
   {
@@ -385,10 +494,10 @@ namespace duckdb
     arrow::flight::FlightCallOptions call_options;
     call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
     // printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
-    call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
+    //    call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
 
     auto joined_column_ids = join_vector(input.column_ids);
-    call_options.headers.emplace_back("airport-duckdb-column-ids", joined_column_ids);
+    //    call_options.headers.emplace_back("airport-duckdb-column-ids", joined_column_ids);
 
     if (!bind_data.auth_token.empty())
     {
@@ -397,12 +506,39 @@ namespace duckdb
       call_options.headers.emplace_back("authorization", ss.str());
     }
 
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(
+    // Rather than using the headers, check to see if the ticket starts with <TICKET_ALLOWS_METADATA>
+
+    auto server_ticket = bind_data.scan_data->flight_info_->endpoints()[0].ticket;
+    auto server_ticket_contents = server_ticket.ticket;
+    if (server_ticket_contents.find("<TICKET_ALLOWS_METADATA>") == 0)
+    {
+      // This ticket allows metadata to be supplied in the ticket.
+
+      auto ticket_without_preamble = server_ticket_contents.substr(strlen("<TICKET_ALLOWS_METADATA>"));
+
+      // encode the length as a unsigned int32 in network byte order
+      uint32_t ticket_length = ticket_without_preamble.size();
+      auto ticket_length_bytes = std::string((char *)&ticket_length, sizeof(ticket_length));
+
+      uint32_t uncompressed_length;
+      auto dynamic_ticket = BuildDynamicTicketData(bind_data.json_filters, joined_column_ids, &uncompressed_length, bind_data.server_location,
+                                                   bind_data.scan_data->flight_info_->descriptor());
+
+      auto compressed_length_bytes = std::string((char *)&uncompressed_length, sizeof(uncompressed_length));
+
+      auto manipulated_ticket_data = "<TICKET_WITH_METADATA>" + ticket_length_bytes + ticket_without_preamble + compressed_length_bytes + dynamic_ticket;
+
+      server_ticket = flight::Ticket{manipulated_ticket_data};
+    }
+
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
         flight_stream,
         bind_data.flight_client->DoGet(
             call_options,
-            bind_data.scan_data->flight_info_->endpoints()[0].ticket),
-        "(" + bind_data.server_location + ")");
+            server_ticket),
+        bind_data.server_location,
+        bind_data.scan_data->flight_info_->descriptor(),
+        "");
 
     bind_data.scan_data->stream_ = std::move(flight_stream);
 

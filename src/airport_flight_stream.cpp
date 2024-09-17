@@ -20,16 +20,17 @@ namespace duckdb
 
   /// Constructor
   AirportFlightStreamReader::AirportFlightStreamReader(
+      const string &flight_server_location,
       std::shared_ptr<flight::FlightInfo> flight_info,
       std::shared_ptr<flight::FlightStreamReader> flight_stream)
-      : flight_info_(flight_info), flight_stream_(flight_stream) {}
+      : flight_server_location_(flight_server_location), flight_info_(flight_info), flight_stream_(flight_stream) {}
 
   /// Get the schema
   std::shared_ptr<arrow::Schema> AirportFlightStreamReader::schema() const
   {
     std::shared_ptr<arrow::Schema> info_schema;
     arrow::ipc::DictionaryMemo dictionary_memo;
-    AIRPORT_ASSIGN_OR_RAISE(info_schema, flight_info_->GetSchema(&dictionary_memo), "(" + flight_info_->descriptor().ToString() + ")");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(info_schema, flight_info_->GetSchema(&dictionary_memo), flight_server_location_, flight_info_->descriptor(), "");
     return info_schema;
   }
 
@@ -38,7 +39,7 @@ namespace duckdb
   arrow::Status AirportFlightStreamReader::ReadNext(
       std::shared_ptr<arrow::RecordBatch> *batch)
   {
-    AIRPORT_ASSIGN_OR_RAISE(auto chunk, flight_stream_.get()->Next(), "(" + flight_info_->descriptor().ToString() + ")");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto chunk, flight_stream_.get()->Next(), flight_server_location_, flight_info_->descriptor(), "");
     if (!chunk.data)
     {
       // End of the stream has been reached.
@@ -65,7 +66,7 @@ namespace duckdb
     // If this doesn't work I can re-implement the ArrowArrayStreamWrapper
     // to take a FlightStreamReader instead of a RecordBatchReader.
 
-    AIRPORT_ASSIGN_OR_RAISE(auto reader, flight::MakeRecordBatchReader(buffer_data->stream_), "(" + buffer_data->flight_info_->descriptor().ToString() + ")");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto reader, flight::MakeRecordBatchReader(buffer_data->stream_), buffer_data->flight_server_location_, buffer_data->flight_info_->descriptor(), "");
 
     // Create arrow stream
     auto stream_wrapper = duckdb::make_uniq<duckdb::ArrowArrayStreamWrapper>();
@@ -97,8 +98,10 @@ namespace duckdb
 
     std::shared_ptr<arrow::Schema> info_schema;
     arrow::ipc::DictionaryMemo dictionary_memo;
-    AIRPORT_ASSIGN_OR_RAISE(info_schema, reader->get()->flight_info_->GetSchema(&dictionary_memo), "(" + reader->get()->flight_info_->descriptor().ToString() + ")");
+    const auto actual_reader = reader->get();
 
-    AIRPORT_ASSERT_OK(ExportSchema(*info_schema, &schema.arrow_schema), "(" + reader->get()->flight_info_->descriptor().ToString() + ")");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(info_schema, actual_reader->flight_info_->GetSchema(&dictionary_memo), actual_reader->flight_server_location_, actual_reader->flight_info_->descriptor(), "");
+
+    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(ExportSchema(*info_schema, &schema.arrow_schema), actual_reader->flight_server_location_, actual_reader->flight_info_->descriptor(), "ExportSchema");
   }
 } // namespace duckdb

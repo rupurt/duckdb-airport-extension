@@ -15,15 +15,14 @@ project(${TARGET_NAME})
 include_directories(src/include)
 
 set(EXTENSION_SOURCES
+  src/airport_exception.cpp
   src/airport_extension.cpp
   src/airport_flight_stream.cpp
-  src/airport_json_serializer.cpp
   src/airport_json_common.cpp
+  src/airport_json_serializer.cpp
   src/airport_list_flights.cpp
-  src/airport_take_flight.cpp
   src/airport_secrets.cpp
-
-
+  src/airport_take_flight.cpp
   src/storage/airport_catalog_api.cpp
   src/storage/airport_catalog_set.cpp
   src/storage/airport_catalog.cpp

@@ -57,7 +57,8 @@ namespace duckdb
   {
     if (schema_name == DEFAULT_SCHEMA)
     {
-      if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+      if (if_not_found == OnEntryNotFound::RETURN_NULL)
+      {
         // There really isn't a default way to handle this, so just return null.
         return nullptr;
       }
@@ -95,6 +96,7 @@ namespace duckdb
   unique_ptr<PhysicalOperator> AirportCatalog::PlanInsert(ClientContext &context, LogicalInsert &op,
                                                           unique_ptr<PhysicalOperator> plan)
   {
+
     throw NotImplementedException("AirportCatalog PlanInsert");
   }
   unique_ptr<PhysicalOperator> AirportCatalog::PlanCreateTableAs(ClientContext &context, LogicalCreateTable &op,

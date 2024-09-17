@@ -16,6 +16,7 @@
 #include "airport_macros.hpp"
 #include <arrow/c/bridge.h>
 #include "duckdb/function/table/arrow.hpp"
+#include "duckdb/common/arrow/schema_metadata.hpp"
 #include "storage/airport_curl_pool.hpp"
 
 namespace duckdb
@@ -58,15 +59,16 @@ namespace duckdb
       std::shared_ptr<arrow::Schema> info_schema;
       arrow::ipc::DictionaryMemo dictionary_memo;
       string error_location = "(" + airport_catalog.credentials.location + ")";
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(info_schema, table.flight_info->GetSchema(&dictionary_memo), error_location);
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(info_schema, table.flight_info->GetSchema(&dictionary_memo), airport_catalog.credentials.location, table.flight_info->descriptor(), "");
 
       ArrowSchema arrow_schema;
 
-      AIRPORT_ARROW_ASSERT_OK(ExportSchema(*info_schema, &arrow_schema), error_location);
+      AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(ExportSchema(*info_schema, &arrow_schema), airport_catalog.credentials.location, table.flight_info->descriptor(), "ExportSchema");
 
       vector<string> column_names;
       vector<duckdb::LogicalType> return_types;
 
+      vector<string> not_null_columns;
       for (idx_t col_idx = 0;
            col_idx < (idx_t)arrow_schema.n_children; col_idx++)
       {
@@ -94,14 +96,39 @@ namespace duckdb
         {
           return_types.emplace_back(arrow_type->GetDuckType());
         }
+
+        if (!(column.flags & ARROW_FLAG_NULLABLE))
+        {
+          not_null_columns.emplace_back(column_name);
+        }
       }
-      arrow_schema.release(&arrow_schema);
 
       QueryResult::DeduplicateColumns(column_names);
       for (idx_t col_idx = 0;
            col_idx < (idx_t)arrow_schema.n_children; col_idx++)
       {
-        info.columns.AddColumn({column_names[col_idx], return_types[col_idx]});
+        auto &column = *arrow_schema.children[col_idx];
+
+        auto column_def = ColumnDefinition(column_names[col_idx], return_types[col_idx]);
+        if (column.metadata != nullptr)
+        {
+          auto foo = ArrowSchemaMetadata(column.metadata);
+
+          auto comment = foo.GetOption("comment");
+          if (!comment.empty())
+          {
+            column_def.SetComment(duckdb::Value(comment));
+          }
+        }
+
+        info.columns.AddColumn(std::move(column_def));
+      }
+      arrow_schema.release(&arrow_schema);
+
+      for (auto col_name : not_null_columns)
+      {
+        auto not_null_index = info.columns.GetColumnIndex(col_name);
+        info.constraints.emplace_back(make_uniq<NotNullConstraint>(not_null_index));
       }
 
       auto table_entry = make_uniq<AirportTableEntry>(catalog, schema, info);

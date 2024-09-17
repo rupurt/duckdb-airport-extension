@@ -115,9 +115,9 @@ namespace duckdb
       return it->second; // Return a reference to the object
     }
 
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto parsed_location,
-                                  flight::Location::Parse(location), "()");
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto created_flight_client, flight::FlightClient::Connect(parsed_location), "(" + location + ")");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto parsed_location,
+                                            flight::Location::Parse(location), location, "");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto created_flight_client, flight::FlightClient::Connect(parsed_location), location, "");
 
     airport_flight_clients_by_location[location] = std::move(created_flight_client);
 
@@ -400,7 +400,6 @@ namespace duckdb
                                                 AirportCredentials credentials)
   {
     vector<AirportAPITable> result;
-    const string error_location = "(" + credentials.location + ")";
 
     if (!schema_contents_url.empty())
     {
@@ -419,7 +418,7 @@ namespace duckdb
 
       auto codec = arrow::util::Codec::Create(arrow::Compression::ZSTD).ValueOrDie();
 
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(auto decompressed_url_contents, ::arrow::AllocateBuffer(decompressed_length), error_location);
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto decompressed_url_contents, ::arrow::AllocateBuffer(decompressed_length), credentials.location, "");
 
       const size_t size_of_size = 4;
 
@@ -427,7 +426,7 @@ namespace duckdb
           url_contents.size() - size_of_size, reinterpret_cast<const uint8_t *>(url_contents.data() + size_of_size),
           decompressed_length, decompressed_url_contents->mutable_data());
 
-      AIRPORT_ASSERT_OK(decompress_result, error_location);
+      AIRPORT_ARROW_ASSERT_OK_LOCATION(decompress_result, credentials.location, "");
 
       // Now the decompressed result an array of serialized flight::FlightInfo objects, each preceded with the length of the serialization.
       size_t offset = 0;
@@ -443,7 +442,7 @@ namespace duckdb
         std::string_view serialized_flight_info(reinterpret_cast<const char *>(data) + offset, serialized_length);
         offset += serialized_length;
 
-        AIRPORT_ASSIGN_OR_RAISE(auto flight_info, arrow::flight::FlightInfo::Deserialize(serialized_flight_info), error_location);
+        AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto flight_info, arrow::flight::FlightInfo::Deserialize(serialized_flight_info), credentials.location, "");
 
         AirportAPITable table{
             .location = credentials.location,
@@ -480,10 +479,10 @@ namespace duckdb
 
       std::unique_ptr<flight::FlightClient> &flight_client = flightClientForLocation(credentials.location);
 
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(auto listing, flight_client->ListFlights(call_options, {credentials.criteria}), error_location);
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto listing, flight_client->ListFlights(call_options, {credentials.criteria}), credentials.location, "");
 
       std::unique_ptr<flight::FlightInfo> flight_info;
-      AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, listing->Next(), error_location);
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(flight_info, listing->Next(), credentials.location, "");
 
       while (flight_info != nullptr)
       {
@@ -504,7 +503,7 @@ namespace duckdb
           result.emplace_back(table);
         }
 
-        AIRPORT_ARROW_ASSIGN_OR_RAISE(flight_info, listing->Next(), error_location);
+        AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(flight_info, listing->Next(), credentials.location, "");
       }
 
       return result;
@@ -579,14 +578,12 @@ namespace duckdb
     arrow::flight::Action action{"list_schemas"};
     std::unique_ptr<arrow::flight::ResultStream> action_results;
 
-    auto error_location_descriptor = "(" + credentials.location + ")";
-
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(action_results, flight_client->DoAction(call_options, action), error_location_descriptor);
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(action_results, flight_client->DoAction(call_options, action), credentials.location, "");
 
     // the first item is the decompressed length
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto decompressed_schema_length_buffer, action_results->Next(), error_location_descriptor);
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto decompressed_schema_length_buffer, action_results->Next(), credentials.location, "");
     // the second is the compressed schema data.
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto compressed_schema_data, action_results->Next(), error_location_descriptor);
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto compressed_schema_data, action_results->Next(), credentials.location, "");
 
     // Expand the compressed data that was compressed with zstd.
 
@@ -594,13 +591,13 @@ namespace duckdb
 
     auto codec = arrow::util::Codec::Create(arrow::Compression::ZSTD).ValueOrDie();
 
-    AIRPORT_ARROW_ASSIGN_OR_RAISE(auto decompressed_schema_data, ::arrow::AllocateBuffer(decompressed_length), error_location_descriptor);
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto decompressed_schema_data, ::arrow::AllocateBuffer(decompressed_length), credentials.location, "");
 
     auto decompress_result = codec->Decompress(
         compressed_schema_data->body->size(), reinterpret_cast<const uint8_t *>(compressed_schema_data->body->data()),
         decompressed_length, decompressed_schema_data->mutable_data());
 
-    AIRPORT_ASSERT_OK(decompress_result, error_location_descriptor);
+    AIRPORT_ARROW_ASSERT_OK_LOCATION(decompress_result, credentials.location, "");
 
     string contents_url;
     string contents_sha256;
@@ -655,7 +652,7 @@ namespace duckdb
     }
     yyjson_doc_free(doc);
 
-    AIRPORT_ARROW_ASSERT_OK(action_results->Drain(), error_location_descriptor);
+    AIRPORT_ARROW_ASSERT_OK_LOCATION(action_results->Drain(), credentials.location, "");
 
     return result;
   }

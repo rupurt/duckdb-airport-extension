@@ -24,9 +24,12 @@ namespace duckdb
   struct AirportTakeFlightScanData
   {
   public:
-    AirportTakeFlightScanData(std::shared_ptr<flight::FlightInfo> flight_info,
-                              std::shared_ptr<flight::FlightStreamReader> stream) : flight_info_(flight_info), stream_(stream) {}
+    AirportTakeFlightScanData(
+        const string &flight_server_location,
+        std::shared_ptr<flight::FlightInfo> flight_info,
+        std::shared_ptr<flight::FlightStreamReader> stream) : flight_server_location_(flight_server_location), flight_info_(flight_info), stream_(stream) {}
 
+    string flight_server_location_;
     std::shared_ptr<flight::FlightInfo> flight_info_;
     std::shared_ptr<arrow::flight::FlightStreamReader> stream_;
   };
@@ -49,12 +52,14 @@ namespace duckdb
   {
   protected:
     /// The buffer
+    string flight_server_location_;
     std::shared_ptr<flight::FlightInfo> flight_info_;
     std::shared_ptr<flight::FlightStreamReader> flight_stream_;
 
   public:
     /// Constructor
     AirportFlightStreamReader(
+        const string &flight_server_location,
         std::shared_ptr<flight::FlightInfo> flight_info,
         std::shared_ptr<flight::FlightStreamReader> flight_stream);
 
