@@ -329,17 +329,20 @@ namespace duckdb
     //    const fs::path finalFilename = paths.second;
 
     // Check if data is in cache
-    std::string cachedData = readFromFile(*fs, paths.second);
-    if (!cachedData.empty())
+    if (fs->FileExists(paths.second))
     {
-      // Verify that the SHA256 matches the returned data, don't allow a corrupted filesystem
-      // to affect things.
-      if (!expected_sha256.empty() && SHA256ForString(cachedData) != expected_sha256)
+      std::string cachedData = readFromFile(*fs, paths.second);
+      if (!cachedData.empty())
       {
-        throw IOException("SHA256 mismatch for URL: %s from cached data at %s, check for cache corruption", url, paths.second.c_str());
+        // Verify that the SHA256 matches the returned data, don't allow a corrupted filesystem
+        // to affect things.
+        if (!expected_sha256.empty() && SHA256ForString(cachedData) != expected_sha256)
+        {
+          throw IOException("SHA256 mismatch for URL: %s from cached data at %s, check for cache corruption", url, paths.second.c_str());
+        }
+        // printf("Got disk cache hit for %s\n", url.c_str());
+        return std::make_pair(200, cachedData);
       }
-      // printf("Got disk cache hit for %s\n", url.c_str());
-      return std::make_pair(200, cachedData);
     }
 
     // I know this doesn't work for zero byte cached responses, its okay.
