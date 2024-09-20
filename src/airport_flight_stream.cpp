@@ -1,5 +1,6 @@
 #include "airport_flight_stream.hpp"
 #include "airport_macros.hpp"
+#include "airport_exception.hpp"
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
@@ -11,12 +12,94 @@
 
 #include <iostream>
 #include <memory>
+#include <arrow/buffer.h>
+#include "yyjson.hpp"
 
 /// File copied from
 /// https://github.com/duckdb/duckdb-wasm/blob/0ad10e7db4ef4025f5f4120be37addc4ebe29618/lib/src/arrow_stream_buffer.cc
 
+using namespace duckdb_yyjson; // NOLINT
+
 namespace duckdb
 {
+
+  class FlightMetadataRecordBatchReaderAdapter : public arrow::RecordBatchReader
+  {
+  public:
+    explicit FlightMetadataRecordBatchReaderAdapter(
+        const string &flight_server_location,
+        const flight::FlightDescriptor &flight_descriptor,
+        double *progress,
+        std::shared_ptr<arrow::Schema> schema,
+        std::shared_ptr<flight::MetadataRecordBatchReader> delegate)
+        : flight_server_location_(flight_server_location), flight_descriptor_(flight_descriptor), schema_(std::move(schema)), delegate_(std::move(delegate)), progress_(progress) {}
+    std::shared_ptr<arrow::Schema> schema() const override { return schema_; }
+    arrow::Status ReadNext(std::shared_ptr<arrow::RecordBatch> *batch) override
+    {
+      while (true)
+      {
+        AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(flight::FlightStreamChunk next, delegate_->Next(), flight_server_location_, flight_descriptor_, "");
+        if (next.app_metadata)
+        {
+          // Handle app metadata if needed
+
+          // Try to parse out a JSON document that contains a progress indicator
+          // that will udpate the scan data.
+          yyjson_doc *doc = yyjson_read((const char *)next.app_metadata->data(), next.app_metadata->size(), 0);
+          if (doc)
+          {
+            // Get the root object
+            yyjson_val *root = yyjson_doc_get_root(doc);
+            if (root && yyjson_is_obj(root))
+            {
+              yyjson_val *progress_val = yyjson_obj_get(root, "progress");
+              if (progress_val && yyjson_is_real(progress_val))
+              {
+                double progress = yyjson_get_real(progress_val);
+                *progress_ = progress; // Update the progress
+              }
+            }
+          }
+          // Free the JSON document
+          yyjson_doc_free(doc);
+        }
+        if (!next.data && !next.app_metadata)
+        {
+          // EOS
+          *batch = nullptr;
+          return arrow::Status::OK();
+        }
+        else if (next.data)
+        {
+          *batch = std::move(next.data);
+          return arrow::Status::OK();
+        }
+        // Got metadata, but no data (which is valid) - read the next message
+      }
+    }
+
+  private:
+    const string flight_server_location_;
+    flight::FlightDescriptor flight_descriptor_;
+    std::shared_ptr<arrow::Schema> schema_;
+    std::shared_ptr<flight::MetadataRecordBatchReader> delegate_;
+    double *progress_;
+  };
+
+  static arrow::Result<std::shared_ptr<arrow::RecordBatchReader>> FlightMakeRecordBatchReader(
+      std::shared_ptr<flight::MetadataRecordBatchReader> reader,
+      const string &flight_server_location,
+      const flight::FlightDescriptor &flight_descriptor,
+      double *progress)
+  {
+    ARROW_ASSIGN_OR_RAISE(auto schema, reader->GetSchema());
+    return std::make_shared<FlightMetadataRecordBatchReaderAdapter>(
+        flight_server_location,
+        flight_descriptor,
+        progress,
+        std::move(schema),
+        std::move(reader));
+  }
 
   /// Constructor
   AirportFlightStreamReader::AirportFlightStreamReader(
@@ -66,10 +149,16 @@ namespace duckdb
     // If this doesn't work I can re-implement the ArrowArrayStreamWrapper
     // to take a FlightStreamReader instead of a RecordBatchReader.
 
-    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto reader, flight::MakeRecordBatchReader(buffer_data->stream_), buffer_data->flight_server_location_, buffer_data->flight_info_->descriptor(), "");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
+        auto reader,
+        FlightMakeRecordBatchReader(buffer_data->stream_, buffer_data->flight_server_location_, buffer_data->flight_info_->descriptor(), &buffer_data->progress_),
+        buffer_data->flight_server_location_,
+        buffer_data->flight_info_->descriptor(),
+        "");
 
     // Create arrow stream
-    auto stream_wrapper = duckdb::make_uniq<duckdb::ArrowArrayStreamWrapper>();
+    //    auto stream_wrapper = duckdb::make_uniq<duckdb::ArrowArrayStreamWrapper>();
+    auto stream_wrapper = duckdb::make_uniq<AirportArrowArrayStreamWrapper>(buffer_data->flight_server_location_, buffer_data->flight_info_->descriptor());
     stream_wrapper->arrow_array_stream.release = nullptr;
 
     auto maybe_ok = arrow::ExportRecordBatchReader(
@@ -104,4 +193,16 @@ namespace duckdb
 
     AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(ExportSchema(*info_schema, &schema.arrow_schema), actual_reader->flight_server_location_, actual_reader->flight_info_->descriptor(), "ExportSchema");
   }
+
+  shared_ptr<ArrowArrayWrapper> AirportArrowArrayStreamWrapper::GetNextChunk()
+  {
+    auto current_chunk = make_shared_ptr<ArrowArrayWrapper>();
+    if (arrow_array_stream.get_next(&arrow_array_stream, &current_chunk->arrow_array))
+    { // LCOV_EXCL_START
+      throw AirportFlightException(flight_server_location_, flight_descriptor_, string(GetError()), "");
+    } // LCOV_EXCL_STOP
+
+    return current_chunk;
+  }
+
 } // namespace duckdb

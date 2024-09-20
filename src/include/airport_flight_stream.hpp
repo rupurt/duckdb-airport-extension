@@ -27,11 +27,12 @@ namespace duckdb
     AirportTakeFlightScanData(
         const string &flight_server_location,
         std::shared_ptr<flight::FlightInfo> flight_info,
-        std::shared_ptr<flight::FlightStreamReader> stream) : flight_server_location_(flight_server_location), flight_info_(flight_info), stream_(stream) {}
+        std::shared_ptr<flight::FlightStreamReader> stream) : flight_server_location_(flight_server_location), flight_info_(flight_info), stream_(stream), progress_(0) {}
 
     string flight_server_location_;
     std::shared_ptr<flight::FlightInfo> flight_info_;
     std::shared_ptr<arrow::flight::FlightStreamReader> stream_;
+    double progress_;
   };
 
   struct AirportTakeFlightBindData : public ArrowScanFunctionData
@@ -46,6 +47,7 @@ namespace duckdb
 
     // This is the auth token.
     string auth_token;
+    mutable mutex lock;
   };
 
   struct AirportFlightStreamReader : public arrow::RecordBatchReader
@@ -80,6 +82,18 @@ namespace duckdb
 
     /// Create arrow array stream wrapper
     static void GetSchema(uintptr_t buffer_ptr, duckdb::ArrowSchemaWrapper &schema);
+  };
+
+  class AirportArrowArrayStreamWrapper : public duckdb::ArrowArrayStreamWrapper
+  {
+  public:
+    AirportArrowArrayStreamWrapper(const string &flight_server_location, const flight::FlightDescriptor &flight_descriptor) : flight_server_location_(flight_server_location), flight_descriptor_(flight_descriptor) {}
+
+    shared_ptr<ArrowArrayWrapper> GetNextChunk();
+
+  private:
+    string flight_server_location_;
+    flight::FlightDescriptor flight_descriptor_;
   };
 
 } // namespace duckdb

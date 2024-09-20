@@ -564,6 +564,14 @@ namespace duckdb
     return std::move(result);
   }
 
+  static double take_flight_scan_progress(ClientContext &, const FunctionData *data, const GlobalTableFunctionState *global_state)
+  {
+    auto &bind_data = data->Cast<AirportTakeFlightBindData>();
+    lock_guard<mutex> guard(bind_data.lock);
+
+    return bind_data.scan_data->progress_ * 100.0;
+  }
+
   void AddTakeFlightFunction(DatabaseInstance &instance)
   {
 
@@ -588,6 +596,7 @@ namespace duckdb
     take_flight_function_with_descriptor.get_batch_index = nullptr;
     take_flight_function_with_descriptor.projection_pushdown = true;
     take_flight_function_with_descriptor.filter_pushdown = false;
+    take_flight_function_with_descriptor.table_scan_progress = take_flight_scan_progress;
     take_flight_function_set.AddFunction(take_flight_function_with_descriptor);
 
     auto take_flight_function_with_pointer = TableFunction(
@@ -609,6 +618,8 @@ namespace duckdb
     take_flight_function_with_pointer.get_batch_index = nullptr;
     take_flight_function_with_pointer.projection_pushdown = true;
     take_flight_function_with_pointer.filter_pushdown = false;
+    take_flight_function_with_pointer.table_scan_progress = take_flight_scan_progress;
+
     take_flight_function_set.AddFunction(take_flight_function_with_pointer);
 
     ExtensionUtil::RegisterFunction(instance, take_flight_function_set);
