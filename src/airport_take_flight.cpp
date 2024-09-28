@@ -135,6 +135,12 @@ namespace duckdb
                                                        descriptor,
                                                        "");
 
+    // Assert that the descriptor is the same as the one that was passed in.
+    if (descriptor != flight_info->descriptor())
+    {
+      throw InvalidInputException("airport_take_flight: descriptor returned from server does not match the descriptor that was passed in to GetFlightInfo, check with Flight server implementation.");
+    }
+
     // Store the flight info on the bind data.
 
     // After doing a little bit of examination of the DuckDb sources, I learned that
