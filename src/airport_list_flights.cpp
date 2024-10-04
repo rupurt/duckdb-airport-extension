@@ -12,6 +12,7 @@
 #include "airport_json_serializer.hpp"
 #include "airport_macros.hpp"
 #include "airport_secrets.hpp"
+#include "airport_headers.hpp"
 
 namespace flight = arrow::flight;
 
@@ -144,7 +145,7 @@ namespace duckdb
     {
       // Now send a list flights request.
       arrow::flight::FlightCallOptions call_options;
-      call_options.headers.emplace_back("airport-user-agent", AIRPORT_USER_AGENT);
+      airport_add_standard_headers(call_options, bind_data.server_location);
       call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
 
       if (!bind_data.auth_token.empty())

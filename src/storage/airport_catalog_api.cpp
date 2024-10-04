@@ -18,6 +18,7 @@
 
 #include "airport_macros.hpp"
 #include "airport_secrets.hpp"
+#include "airport_headers.hpp"
 #include "airport_extension.hpp"
 #include <curl/curl.h>
 
@@ -469,7 +470,7 @@ namespace duckdb
     {
       // We need to load the contents of the schemas by listing the flights.
       arrow::flight::FlightCallOptions call_options;
-      call_options.headers.emplace_back("airport-user-agent", AIRPORT_USER_AGENT);
+      airport_add_standard_headers(call_options, credentials.location);
       call_options.headers.emplace_back("airport-list-flights-filter-catalog", catalog);
       call_options.headers.emplace_back("airport-list-flights-filter-schema", schema);
 
@@ -562,7 +563,7 @@ namespace duckdb
 
     arrow::flight::FlightCallOptions call_options;
 
-    call_options.headers.emplace_back("airport-user-agent", AIRPORT_USER_AGENT);
+    airport_add_standard_headers(call_options, credentials.location);
     call_options.headers.emplace_back("airport-list-flights-no-schemas", "1");
     call_options.headers.emplace_back("airport-list-flights-listing-schemas", "1");
     call_options.headers.emplace_back("airport-list-flights-filter-catalog", catalog);
@@ -585,6 +586,11 @@ namespace duckdb
 
     // the first item is the decompressed length
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto decompressed_schema_length_buffer, action_results->Next(), credentials.location, "");
+
+    if (decompressed_schema_length_buffer == nullptr)
+    {
+      throw AirportFlightException(credentials.location, "Failed to obtain schema data from Arrow Flight server via DoAction()");
+    }
     // the second is the compressed schema data.
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto compressed_schema_data, action_results->Next(), credentials.location, "");
 

@@ -34,6 +34,7 @@ set(EXTENSION_SOURCES
   src/storage/airport_transaction_manager.cpp
   src/storage/airport_transaction.cpp
   src/storage/airport_curl_pool.cpp
+  src/airport_headers.cpp
 )
 
 

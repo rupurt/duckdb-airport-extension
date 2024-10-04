@@ -199,7 +199,17 @@ namespace duckdb
     return build_error_message(location, "", msg, arrow_status_string);
   }
 
+  string AirportFlightException::produce_flight_error_message(const string &location, const string &msg)
+  {
+    // So its kind of silly to have the grpc context
+    return build_error_message(location, "", msg, "");
+  }
+
   AirportFlightException::AirportFlightException(const string &location, const arrow::Status &status, const string &msg) : Exception(ExceptionType::IO, produce_flight_error_message(location, status, msg), extract_extra_info(status, {}))
+  {
+  }
+
+  AirportFlightException::AirportFlightException(const string &location, const string &msg) : Exception(ExceptionType::IO, produce_flight_error_message(location, msg))
   {
   }
 

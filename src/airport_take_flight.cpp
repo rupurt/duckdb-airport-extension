@@ -15,6 +15,7 @@
 #include "airport_flight_stream.hpp"
 #include "airport_macros.hpp"
 #include "airport_secrets.hpp"
+#include "airport_headers.hpp"
 #include "airport_exception.hpp"
 
 namespace duckdb
@@ -119,7 +120,7 @@ namespace duckdb
                                                        "");
 
     arrow::flight::FlightCallOptions call_options;
-    call_options.headers.emplace_back("airport-user-agent", AIRPORT_USER_AGENT);
+    airport_add_standard_headers(call_options, take_flight_params.server_location);
     if (!take_flight_params.auth_token.empty())
     {
       std::stringstream ss;
@@ -498,7 +499,7 @@ namespace duckdb
     std::unique_ptr<flight::FlightStreamReader> flight_stream;
 
     arrow::flight::FlightCallOptions call_options;
-    call_options.headers.emplace_back("arrow-flight-user-agent", "duckdb-airport/0.0.1");
+    airport_add_standard_headers(call_options, bind_data.server_location);
     // printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
     //    call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
 
