@@ -500,11 +500,20 @@ namespace duckdb
 
     arrow::flight::FlightCallOptions call_options;
     airport_add_standard_headers(call_options, bind_data.server_location);
-    // printf("Calling with filters: %s\n", bind_data.json_filters.c_str());
-    //    call_options.headers.emplace_back("airport-duckdb-json-filters", bind_data.json_filters);
 
-    auto joined_column_ids = join_vector(input.column_ids);
-    //    call_options.headers.emplace_back("airport-duckdb-column-ids", joined_column_ids);
+    // Since the ticket is an opaque reference to the stream, its useful to the middle ware
+    // sometimes to know what the path of the flight is.
+    auto descriptor = bind_data.scan_data->flight_info_->descriptor();
+    if (descriptor.type == arrow::flight::FlightDescriptor::PATH)
+    {
+      auto path_parts = descriptor.path;
+      std::string joined_path_parts = std::accumulate(std::next(path_parts.begin()), path_parts.end(), path_parts[0],
+                                                      [](const std::string &a, const std::string &b)
+                                                      {
+                                                        return a + '/' + b;
+                                                      });
+      call_options.headers.emplace_back("airport-take-flight-path", joined_path_parts);
+    }
 
     if (!bind_data.auth_token.empty())
     {
@@ -528,6 +537,8 @@ namespace duckdb
       auto ticket_length_bytes = std::string((char *)&ticket_length, sizeof(ticket_length));
 
       uint32_t uncompressed_length;
+      auto joined_column_ids = join_vector(input.column_ids);
+
       auto dynamic_ticket = BuildDynamicTicketData(bind_data.json_filters, joined_column_ids, &uncompressed_length, bind_data.server_location,
                                                    bind_data.scan_data->flight_info_->descriptor());
 
