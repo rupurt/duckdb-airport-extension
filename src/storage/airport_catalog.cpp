@@ -22,6 +22,15 @@ namespace duckdb
   {
   }
 
+  optional_idx AirportCatalog::GetCatalogVersion(ClientContext &context)
+  {
+    // These catalogs generally don't change so just return 1 for now, if we were
+    // creating dynamic tables or other changes this will have to change.
+    //
+    // If we don't do this all statements get rebound twice.
+    return 1;
+  }
+
   optional_ptr<CatalogEntry> AirportCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info)
   {
     if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT)
