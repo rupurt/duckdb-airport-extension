@@ -45,6 +45,9 @@ namespace duckdb
     string server_location;
     string json_filters;
 
+    // This is the trace id so that calls to GetFlightInfo and DoGet can be traced.
+    string trace_id;
+
     // This is the auth token.
     string auth_token;
     mutable mutex lock;

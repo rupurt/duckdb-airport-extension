@@ -576,6 +576,7 @@ namespace duckdb
       ss << "Bearer " << credentials.auth_token;
       call_options.headers.emplace_back("authorization", ss.str());
     }
+    call_options.headers.emplace_back("airport-action-name", "list_schemas");
 
     std::unique_ptr<flight::FlightClient> &flight_client = flightClientForLocation(credentials.location);
 

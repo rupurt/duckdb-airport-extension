@@ -9,6 +9,7 @@
 #include "duckdb/main/extension_util.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
+#include "duckdb/common/types/uuid.hpp"
 
 #include "airport_json_common.hpp"
 #include "airport_json_serializer.hpp"
@@ -108,6 +109,9 @@ namespace duckdb
       vector<string> &names)
   {
 
+    // Create a UID for tracing.
+    auto trace_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto location, flight::Location::Parse(take_flight_params.server_location),
                                                        take_flight_params.server_location,
                                                        descriptor,
@@ -126,6 +130,19 @@ namespace duckdb
       std::stringstream ss;
       ss << "Bearer " << take_flight_params.auth_token;
       call_options.headers.emplace_back("authorization", ss.str());
+    }
+
+    call_options.headers.emplace_back("airport-trace-id", trace_uuid);
+
+    if (descriptor.type == arrow::flight::FlightDescriptor::PATH)
+    {
+      auto path_parts = descriptor.path;
+      std::string joined_path_parts = std::accumulate(std::next(path_parts.begin()), path_parts.end(), path_parts[0],
+                                                      [](const std::string &a, const std::string &b)
+                                                      {
+                                                        return a + '/' + b;
+                                                      });
+      call_options.headers.emplace_back("airport-flight-path", joined_path_parts);
     }
 
     // Get the information about the flight, this will allow the
@@ -168,6 +185,7 @@ namespace duckdb
     ret->flight_client = std::move(flight_client);
     ret->auth_token = take_flight_params.auth_token;
     ret->server_location = take_flight_params.server_location;
+    ret->trace_id = trace_uuid;
 
     auto &data = *ret;
 
@@ -245,6 +263,7 @@ namespace duckdb
     {
       throw BinderException("airport: take_flight_with_pointer, pointers to flight descriptor cannot be null");
     }
+
     auto descriptor = *reinterpret_cast<flight::FlightDescriptor *>(input.inputs[1].GetPointer());
 
     return take_flight_bind_with_descriptor(
@@ -342,7 +361,10 @@ namespace duckdb
     yyjson_mut_val *column_id_names = yyjson_mut_arr(doc);
     for (auto id : get.GetColumnIds())
     {
-      yyjson_mut_arr_add_str(doc, column_id_names, get.names[id].c_str());
+      if (id != COLUMN_IDENTIFIER_ROW_ID)
+      {
+        yyjson_mut_arr_add_str(doc, column_id_names, get.names[id].c_str());
+      }
     }
 
     yyjson_mut_obj_add_val(doc, result_obj, "filters", filters_arr);
@@ -512,7 +534,7 @@ namespace duckdb
                                                       {
                                                         return a + '/' + b;
                                                       });
-      call_options.headers.emplace_back("airport-take-flight-path", joined_path_parts);
+      call_options.headers.emplace_back("airport-flight-path", joined_path_parts);
     }
 
     if (!bind_data.auth_token.empty())
@@ -521,6 +543,8 @@ namespace duckdb
       ss << "Bearer " << bind_data.auth_token;
       call_options.headers.emplace_back("authorization", ss.str());
     }
+
+    call_options.headers.emplace_back("airport-trace-id", bind_data.trace_id);
 
     // Rather than using the headers, check to see if the ticket starts with <TICKET_ALLOWS_METADATA>
 
