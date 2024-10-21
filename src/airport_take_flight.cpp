@@ -407,35 +407,6 @@ namespace duckdb
     }
     parameters.filters = filters;
 
-    if (filters)
-    {
-      auto allocator = AirportJSONAllocator(Allocator::DefaultAllocator());
-      auto alc = allocator.GetYYAlc();
-
-      auto doc = AirportJSONCommon::CreateDocument(alc);
-      auto result_obj = yyjson_mut_obj(doc);
-      yyjson_mut_doc_set_root(doc, result_obj);
-      auto filters_arr = yyjson_mut_arr(doc);
-
-      auto serializer = AirportJsonSerializer(doc, true, true, true);
-      filters->Serialize(serializer);
-      yyjson_mut_arr_append(filters_arr, serializer.GetRootObject());
-
-      idx_t len;
-      auto data = yyjson_mut_val_write_opts(
-          result_obj,
-          AirportJSONCommon::WRITE_FLAG,
-          alc, reinterpret_cast<size_t *>(&len), nullptr);
-
-      if (data == nullptr)
-      {
-        throw SerializationException(
-            "Failed to serialize json, perhaps the query contains invalid utf8 characters?");
-      }
-
-      auto json_result = string(data, (size_t)len);
-    }
-
     return function.scanner_producer(function.stream_factory_ptr, parameters);
   }
 
