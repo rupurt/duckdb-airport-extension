@@ -22,6 +22,28 @@
 namespace duckdb
 {
 
+  static std::string join_vector_of_strings(const std::vector<std::string> &vec, const char joiner)
+  {
+    if (vec.empty())
+      return "";
+
+    return std::accumulate(
+        std::next(vec.begin()), vec.end(), vec.front(),
+        [joiner](const std::string &a, const std::string &b)
+        {
+          return a + joiner + b;
+        });
+  }
+
+  template <typename T>
+  static std::vector<std::string> convert_to_strings(const std::vector<T> &vec)
+  {
+    std::vector<std::string> result(vec.size());
+    std::transform(vec.begin(), vec.end(), result.begin(), [](const T &elem)
+                   { return std::to_string(elem); });
+    return result;
+  }
+
   // Create a FlightDescriptor from a DuckDB value which can be one of a few different
   // types.
   static flight::FlightDescriptor flight_descriptor_from_value(duckdb::Value &flight_descriptor)
@@ -137,11 +159,7 @@ namespace duckdb
     if (descriptor.type == arrow::flight::FlightDescriptor::PATH)
     {
       auto path_parts = descriptor.path;
-      std::string joined_path_parts = std::accumulate(std::next(path_parts.begin()), path_parts.end(), path_parts[0],
-                                                      [](const std::string &a, const std::string &b)
-                                                      {
-                                                        return a + '/' + b;
-                                                      });
+      std::string joined_path_parts = join_vector_of_strings(path_parts, '/');
       call_options.headers.emplace_back("airport-flight-path", joined_path_parts);
     }
 
@@ -410,23 +428,6 @@ namespace duckdb
     return function.scanner_producer(function.stream_factory_ptr, parameters);
   }
 
-  std::string join_vector(const std::vector<idx_t> &vec)
-  {
-    if (vec.empty())
-      return "";
-
-    std::ostringstream oss;
-    auto it = vec.begin();
-    oss << *it; // Add the first element
-
-    for (++it; it != vec.end(); ++it)
-    {
-      oss << ',' << *it;
-    }
-
-    return oss.str();
-  }
-
   static string CompressString(const string &input, const string &location, const flight::FlightDescriptor &descriptor)
   {
     auto codec = arrow::util::Codec::Create(arrow::Compression::ZSTD, 1).ValueOrDie();
@@ -500,11 +501,7 @@ namespace duckdb
     if (descriptor.type == arrow::flight::FlightDescriptor::PATH)
     {
       auto path_parts = descriptor.path;
-      std::string joined_path_parts = std::accumulate(std::next(path_parts.begin()), path_parts.end(), path_parts[0],
-                                                      [](const std::string &a, const std::string &b)
-                                                      {
-                                                        return a + '/' + b;
-                                                      });
+      std::string joined_path_parts = join_vector_of_strings(path_parts, '/');
       call_options.headers.emplace_back("airport-flight-path", joined_path_parts);
     }
 
@@ -532,7 +529,7 @@ namespace duckdb
       auto ticket_length_bytes = std::string((char *)&ticket_length, sizeof(ticket_length));
 
       uint32_t uncompressed_length;
-      auto joined_column_ids = join_vector(input.column_ids);
+      auto joined_column_ids = join_vector_of_strings(convert_to_strings(input.column_ids), ',');
 
       auto dynamic_ticket = BuildDynamicTicketData(bind_data.json_filters, joined_column_ids, &uncompressed_length, bind_data.server_location,
                                                    bind_data.scan_data->flight_info_->descriptor());
