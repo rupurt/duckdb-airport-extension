@@ -112,9 +112,9 @@ namespace duckdb
         auto column_def = ColumnDefinition(column_names[col_idx], return_types[col_idx]);
         if (column.metadata != nullptr)
         {
-          auto foo = ArrowSchemaMetadata(column.metadata);
+          auto column_metadata = ArrowSchemaMetadata(column.metadata);
 
-          auto comment = foo.GetOption("comment");
+          auto comment = column_metadata.GetOption("comment");
           if (!comment.empty())
           {
             column_def.SetComment(duckdb::Value(comment));
