@@ -33,6 +33,7 @@
 
 #include "airport_flight_stream.hpp"
 #include "airport_take_flight.hpp"
+#include "airport_exchange.hpp"
 #include "yyjson.hpp"
 
 using namespace duckdb_yyjson; // NOLINT
@@ -98,36 +99,11 @@ namespace duckdb
     //                            const vector<unique_ptr<BoundConstraint>> &bound_constraints)
     {
       delete_chunk.Initialize(Allocator::Get(context), table.GetTypes());
-      //		delete_state = table.GetStorage().InitializeDelete(table, context, bound_constraints);
     }
     DataChunk delete_chunk;
-    //    unique_ptr<TableDeleteState> delete_state;
   };
 
-  struct AirportDeleteTakeFlightBindData : public ArrowScanFunctionData
-  {
-  public:
-    using ArrowScanFunctionData::ArrowScanFunctionData;
-    std::unique_ptr<AirportTakeFlightScanData> scan_data = nullptr;
-    std::unique_ptr<arrow::flight::FlightClient> flight_client = nullptr;
-
-    string server_location;
-    string json_filters;
-
-    // This is the trace id so that calls to GetFlightInfo and DoGet can be traced.
-    string trace_id;
-
-    idx_t row_id_column_index = COLUMN_IDENTIFIER_ROW_ID;
-
-    // This is the auth token.
-    string auth_token;
-    mutable mutex lock;
-
-    vector<string> names;
-    vector<LogicalType> return_types;
-  };
-
-  class AirportDeleteGlobalState : public GlobalSinkState
+  class AirportDeleteGlobalState : public GlobalSinkState, public AirportExchangeGlobalState
   {
   public:
     explicit AirportDeleteGlobalState(
@@ -146,23 +122,6 @@ namespace duckdb
     bool return_chunk;
 
     AirportTableEntry &table;
-    std::shared_ptr<arrow::Schema> schema;
-    arrow::flight::FlightDescriptor flight_descriptor;
-
-    // These are the streams that talk to the Flight server.
-    // std::unique_ptr<arrow::flight::FlightStreamReader> reader;
-
-    std::unique_ptr<AirportDeleteTakeFlightBindData> scan_bind_data;
-    std::unique_ptr<ArrowArrayStreamWrapper> reader;
-    std::unique_ptr<arrow::flight::FlightStreamWriter> writer;
-
-    duckdb::unique_ptr<TableFunctionInput> scan_table_function_input;
-
-    duckdb::unique_ptr<GlobalTableFunctionState> scan_global_state;
-    duckdb::unique_ptr<LocalTableFunctionState> scan_local_state;
-
-    vector<LogicalType> send_types;
-
     ColumnDataCollection return_collection;
 
     void Flush(ClientContext &context)
@@ -170,7 +129,7 @@ namespace duckdb
     }
   };
 
-  int findIndex(const std::vector<std::string> &vec, const std::string &target)
+  static int findIndex(const std::vector<std::string> &vec, const std::string &target)
   {
     auto it = std::find(vec.begin(), vec.end(), target);
 
@@ -185,7 +144,6 @@ namespace duckdb
   unique_ptr<GlobalSinkState> AirportDelete::GetGlobalSinkState(ClientContext &context) const
   {
     auto &airport_table = table.Cast<AirportTableEntry>();
-    // auto &transaction = AirportTransaction::Get(context, airport_table.catalog);
 
     auto delete_global_state = make_uniq<AirportDeleteGlobalState>(context, airport_table, GetTypes(), return_chunk);
 
@@ -228,7 +186,7 @@ namespace duckdb
     call_options.headers.emplace_back("airport-operation", "delete");
 
     // Indicate if the caller is interested in data being returned.
-    call_options.headers.emplace_back("delete-return-chunks", return_chunk ? "1" : "0");
+    call_options.headers.emplace_back("return-chunks", return_chunk ? "1" : "0");
 
     if (delete_global_state->flight_descriptor.type == arrow::flight::FlightDescriptor::PATH)
     {
@@ -268,7 +226,7 @@ namespace duckdb
         std::move(flight_info),
         std::move(exchange_result.reader));
 
-    auto scan_bind_data = make_uniq<AirportDeleteTakeFlightBindData>(
+    auto scan_bind_data = make_uniq<AirportExchangeTakeFlightBindData>(
         (stream_factory_produce_t)&AirportFlightStreamReader::CreateStream,
         (uintptr_t)scan_data.get());
 

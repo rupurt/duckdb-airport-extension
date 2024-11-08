@@ -67,8 +67,10 @@ namespace duckdb
 
       vector<string> column_names;
       vector<duckdb::LogicalType> return_types;
-
       vector<string> not_null_columns;
+
+      LogicalType row_id_type = LogicalType(LogicalType::ROW_TYPE);
+
       for (idx_t col_idx = 0;
            col_idx < (idx_t)arrow_schema.n_children; col_idx++)
       {
@@ -76,6 +78,21 @@ namespace duckdb
         if (!column.release)
         {
           throw InvalidInputException("AirportTableSet::LoadEntries: released schema passed");
+        }
+
+        if (column.metadata != nullptr)
+        {
+          auto column_metadata = ArrowSchemaMetadata(column.metadata);
+
+          auto is_row_id = column_metadata.GetOption("is_row_id");
+          if (!is_row_id.empty())
+          {
+            row_id_type = ArrowTableFunction::GetArrowLogicalType(column)->GetDuckType();
+
+            // So the skipping here is a problem, since its assumed
+            // that the return_type and column_names can be easily indexed.
+            continue;
+          }
         }
 
         auto column_name = string(column.name);
@@ -104,12 +121,24 @@ namespace duckdb
       }
 
       QueryResult::DeduplicateColumns(column_names);
+      idx_t row_id_adjust = 0;
       for (idx_t col_idx = 0;
            col_idx < (idx_t)arrow_schema.n_children; col_idx++)
       {
         auto &column = *arrow_schema.children[col_idx];
+        if (column.metadata != nullptr)
+        {
+          auto column_metadata = ArrowSchemaMetadata(column.metadata);
 
-        auto column_def = ColumnDefinition(column_names[col_idx], return_types[col_idx]);
+          auto is_row_id = column_metadata.GetOption("is_row_id");
+          if (!is_row_id.empty())
+          {
+            row_id_adjust = 1;
+            continue;
+          }
+        }
+
+        auto column_def = ColumnDefinition(column_names[col_idx - row_id_adjust], return_types[col_idx - row_id_adjust]);
         if (column.metadata != nullptr)
         {
           auto column_metadata = ArrowSchemaMetadata(column.metadata);
@@ -131,20 +160,20 @@ namespace duckdb
         info.constraints.emplace_back(make_uniq<NotNullConstraint>(not_null_index));
       }
 
-      auto table_entry = make_uniq<AirportTableEntry>(catalog, schema, info);
+      auto table_entry = make_uniq<AirportTableEntry>(catalog, schema, info, row_id_type);
       table_entry->table_data = make_uniq<AirportAPITable>(table);
-
       CreateEntry(std::move(table_entry));
     }
   }
 
   optional_ptr<CatalogEntry> AirportTableSet::RefreshTable(ClientContext &context, const string &table_name)
   {
-    auto table_info = GetTableInfo(context, schema, table_name);
-    auto table_entry = make_uniq<AirportTableEntry>(catalog, schema, *table_info);
-    auto table_ptr = table_entry.get();
-    CreateEntry(std::move(table_entry));
-    return table_ptr;
+    throw NotImplementedException("AirportTableSet::RefreshTable");
+    // auto table_info = GetTableInfo(context, schema, table_name);
+    // auto table_entry = make_uniq<AirportTableEntry>(catalog, schema, *table_info);
+    // auto table_ptr = table_entry.get();
+    // CreateEntry(std::move(table_entry));
+    // return table_ptr;
   }
 
   unique_ptr<AirportTableInfo> AirportTableSet::GetTableInfo(ClientContext &context, AirportSchemaEntry &schema,

@@ -30,9 +30,15 @@ namespace duckdb
         const string &flight_server_location,
         const flight::FlightDescriptor &flight_descriptor,
         double *progress,
+        string *last_app_metadata,
         std::shared_ptr<arrow::Schema> schema,
         std::shared_ptr<flight::MetadataRecordBatchReader> delegate)
-        : flight_server_location_(flight_server_location), flight_descriptor_(flight_descriptor), schema_(std::move(schema)), delegate_(std::move(delegate)), progress_(progress) {}
+        : flight_server_location_(flight_server_location),
+          flight_descriptor_(flight_descriptor),
+          schema_(std::move(schema)),
+          delegate_(std::move(delegate)),
+          progress_(progress),
+          last_app_metadata_(last_app_metadata) {}
     std::shared_ptr<arrow::Schema> schema() const override { return schema_; }
     arrow::Status ReadNext(std::shared_ptr<arrow::RecordBatch> *batch) override
     {
@@ -43,25 +49,35 @@ namespace duckdb
         {
           // Handle app metadata if needed
 
-          // Try to parse out a JSON document that contains a progress indicator
-          // that will udpate the scan data.
-          yyjson_doc *doc = yyjson_read((const char *)next.app_metadata->data(), next.app_metadata->size(), 0);
-          if (doc)
+          if (last_app_metadata_)
           {
-            // Get the root object
-            yyjson_val *root = yyjson_doc_get_root(doc);
-            if (root && yyjson_is_obj(root))
+            *last_app_metadata_ = std::string((const char *)next.app_metadata->data(), next.app_metadata->size());
+          }
+
+          // This could be changed later on to be more generic.
+          // especially since this wrapper will be used by more values.
+          if (progress_)
+          {
+            // Try to parse out a JSON document that contains a progress indicator
+            // that will update the scan data.
+            yyjson_doc *doc = yyjson_read((const char *)next.app_metadata->data(), next.app_metadata->size(), 0);
+            if (doc)
             {
-              yyjson_val *progress_val = yyjson_obj_get(root, "progress");
-              if (progress_val && yyjson_is_real(progress_val))
+              // Get the root object
+              yyjson_val *root = yyjson_doc_get_root(doc);
+              if (root && yyjson_is_obj(root))
               {
-                double progress = yyjson_get_real(progress_val);
-                *progress_ = progress; // Update the progress
+                yyjson_val *progress_val = yyjson_obj_get(root, "progress");
+                if (progress_val && yyjson_is_real(progress_val))
+                {
+                  double progress = yyjson_get_real(progress_val);
+                  *progress_ = progress; // Update the progress
+                }
               }
             }
+            // Free the JSON document
+            yyjson_doc_free(doc);
           }
-          // Free the JSON document
-          yyjson_doc_free(doc);
         }
         if (!next.data && !next.app_metadata)
         {
@@ -74,7 +90,6 @@ namespace duckdb
           *batch = std::move(next.data);
           return arrow::Status::OK();
         }
-        // Got metadata, but no data (which is valid) - read the next message
       }
     }
 
@@ -84,19 +99,22 @@ namespace duckdb
     std::shared_ptr<arrow::Schema> schema_;
     std::shared_ptr<flight::MetadataRecordBatchReader> delegate_;
     double *progress_;
+    string *last_app_metadata_;
   };
 
   static arrow::Result<std::shared_ptr<arrow::RecordBatchReader>> FlightMakeRecordBatchReader(
       std::shared_ptr<flight::MetadataRecordBatchReader> reader,
       const string &flight_server_location,
       const flight::FlightDescriptor &flight_descriptor,
-      double *progress)
+      double *progress,
+      string *last_app_metadata)
   {
     ARROW_ASSIGN_OR_RAISE(auto schema, reader->GetSchema());
     return std::make_shared<FlightMetadataRecordBatchReaderAdapter>(
         flight_server_location,
         flight_descriptor,
         progress,
+        last_app_metadata,
         std::move(schema),
         std::move(reader));
   }
@@ -151,7 +169,12 @@ namespace duckdb
 
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
         auto reader,
-        FlightMakeRecordBatchReader(buffer_data->stream_, buffer_data->flight_server_location_, buffer_data->flight_info_->descriptor(), &buffer_data->progress_),
+        FlightMakeRecordBatchReader(
+            buffer_data->stream_,
+            buffer_data->flight_server_location_,
+            buffer_data->flight_info_->descriptor(),
+            &buffer_data->progress_,
+            &buffer_data->last_app_metadata_),
         buffer_data->flight_server_location_,
         buffer_data->flight_info_->descriptor(),
         "");

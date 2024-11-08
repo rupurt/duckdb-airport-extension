@@ -18,6 +18,7 @@
 #include "airport_secrets.hpp"
 #include "airport_headers.hpp"
 #include "airport_exception.hpp"
+#include "duckdb/common/arrow/schema_metadata.hpp"
 
 namespace duckdb
 {
@@ -163,6 +164,8 @@ namespace duckdb
       call_options.headers.emplace_back("airport-flight-path", joined_path_parts);
     }
 
+    // FIXME: this may need to know if we need the row_id.
+
     // Get the information about the flight, this will allow the
     // endpoint information to be returned.
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto flight_info,
@@ -228,24 +231,54 @@ namespace duckdb
         throw InvalidInputException("airport_take_flight: released schema passed");
       }
       auto arrow_type = ArrowTableFunction::GetArrowLogicalType(schema);
+
+      // Determine if the column is the row_id column by looking at the metadata
+      // on the column.
+      bool is_row_id_column = false;
+      if (schema.metadata != nullptr)
+      {
+        auto column_metadata = ArrowSchemaMetadata(schema.metadata);
+
+        auto comment = column_metadata.GetOption("is_row_id");
+        if (!comment.empty())
+        {
+          is_row_id_column = true;
+          ret->row_id_column_index = col_idx;
+        }
+      }
+
       if (schema.dictionary)
       {
         auto dictionary_type = ArrowTableFunction::GetArrowLogicalType(*schema.dictionary);
-        return_types.emplace_back(dictionary_type->GetDuckType());
+        if (!is_row_id_column)
+        {
+          return_types.emplace_back(dictionary_type->GetDuckType());
+        }
         arrow_type->SetDictionary(std::move(dictionary_type));
       }
       else
       {
-        return_types.emplace_back(arrow_type->GetDuckType());
+        if (!is_row_id_column)
+        {
+          return_types.emplace_back(arrow_type->GetDuckType());
+        }
       }
-      ret->arrow_table.AddColumn(col_idx, std::move(arrow_type));
+
+      ret->arrow_table.AddColumn(is_row_id_column ? COLUMN_IDENTIFIER_ROW_ID : col_idx, std::move(arrow_type));
+
+      // FIXME: determine if bind should include the row_id column.
+
       auto format = string(schema.format);
       auto name = string(schema.name);
       if (name.empty())
       {
         name = string("v") + to_string(col_idx);
       }
-      names.push_back(name);
+      if (!is_row_id_column)
+      {
+        names.push_back(name);
+      }
+      // printf("Added column with id %lld %s\n", is_row_id_column ? COLUMN_IDENTIFIER_ROW_ID : col_idx, name.c_str());
     }
     QueryResult::DeduplicateColumns(names);
     return std::move(ret);
@@ -302,6 +335,7 @@ namespace duckdb
     auto &data = data_p.bind_data->CastNoConst<ArrowScanFunctionData>();
     auto &state = data_p.local_state->Cast<ArrowScanLocalState>();
     auto &global_state = data_p.global_state->Cast<ArrowScanGlobalState>();
+    auto &airport_bind_data = data_p.bind_data->Cast<AirportTakeFlightBindData>();
 
     //! Out of tuples in this chunk
     if (state.chunk_offset >= (idx_t)state.chunk->arrow_array.length)
@@ -325,14 +359,14 @@ namespace duckdb
       state.all_columns.Reset();
       state.all_columns.SetCardinality(output_size);
       ArrowTableFunction::ArrowToDuckDB(state, data.arrow_table.GetColumns(), state.all_columns,
-                                        data.lines_read - output_size, false);
+                                        data.lines_read - output_size, false, airport_bind_data.row_id_column_index);
       output.ReferenceColumns(state.all_columns, global_state.projection_ids);
     }
     else
     {
       output.SetCardinality(output_size);
       ArrowTableFunction::ArrowToDuckDB(state, data.arrow_table.GetColumns(), output,
-                                        data.lines_read - output_size, false);
+                                        data.lines_read - output_size, false, airport_bind_data.row_id_column_index);
     }
 
     output.Verify();
@@ -379,10 +413,8 @@ namespace duckdb
     yyjson_mut_val *column_id_names = yyjson_mut_arr(doc);
     for (auto id : get.GetColumnIds())
     {
-      if (id != COLUMN_IDENTIFIER_ROW_ID)
-      {
-        yyjson_mut_arr_add_str(doc, column_id_names, get.names[id].c_str());
-      }
+      // So there can be a special column id specified called rowid.
+      yyjson_mut_arr_add_str(doc, column_id_names, id == COLUMN_IDENTIFIER_ROW_ID ? "rowid" : get.names[id].c_str());
     }
 
     yyjson_mut_obj_add_val(doc, result_obj, "filters", filters_arr);
@@ -406,8 +438,8 @@ namespace duckdb
     bind_data.json_filters = json_result;
   }
 
-  static unique_ptr<ArrowArrayStreamWrapper> AirportProduceArrowScan(const ArrowScanFunctionData &function,
-                                                                     const vector<column_t> &column_ids, TableFilterSet *filters)
+  unique_ptr<ArrowArrayStreamWrapper> AirportProduceArrowScan(const ArrowScanFunctionData &function,
+                                                              const vector<column_t> &column_ids, TableFilterSet *filters)
   {
     //! Generate Projection Pushdown Vector
     ArrowStreamParameters parameters;
@@ -490,8 +522,6 @@ namespace duckdb
 
     auto result = make_uniq<ArrowScanGlobalState>();
 
-    std::unique_ptr<flight::FlightStreamReader> flight_stream;
-
     arrow::flight::FlightCallOptions call_options;
     airport_add_standard_headers(call_options, bind_data.server_location);
 
@@ -529,6 +559,8 @@ namespace duckdb
       auto ticket_length_bytes = std::string((char *)&ticket_length, sizeof(ticket_length));
 
       uint32_t uncompressed_length;
+      // So the column ids can be sent here but there is a special one.
+      // COLUMN_IDENTIFIER_ROW_ID that will be sent.
       auto joined_column_ids = join_vector_of_strings(convert_to_strings(input.column_ids), ',');
 
       auto dynamic_ticket = BuildDynamicTicketData(bind_data.json_filters, joined_column_ids, &uncompressed_length, bind_data.server_location,
@@ -542,7 +574,7 @@ namespace duckdb
     }
 
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
-        flight_stream,
+        bind_data.scan_data->stream_,
         bind_data.flight_client->DoGet(
             call_options,
             server_ticket),
@@ -550,27 +582,30 @@ namespace duckdb
         bind_data.scan_data->flight_info_->descriptor(),
         "");
 
-    bind_data.scan_data->stream_ = std::move(flight_stream);
+    //    bind_data.scan_data->stream_ = std::move(flight_stream);
 
     result->stream = AirportProduceArrowScan(bind_data, input.column_ids, input.filters.get());
 
     // Since we're single threaded, we can only really use a single thread at a time.
     result->max_threads = 1;
-    if (input.CanRemoveFilterColumns())
-    {
-      result->projection_ids = input.projection_ids;
-      for (const auto &col_idx : input.column_ids)
-      {
-        if (col_idx == COLUMN_IDENTIFIER_ROW_ID)
-        {
-          result->scanned_types.emplace_back(LogicalTypeId::BIGINT);
-        }
-        else
-        {
-          result->scanned_types.push_back(bind_data.all_types[col_idx]);
-        }
-      }
-    }
+    // if (input.CanRemoveFilterColumns())
+    // {
+    //   result->projection_ids = input.projection_ids;
+    //   for (const auto &col_idx : input.column_ids)
+    //   {
+    //     if (col_idx == COLUMN_IDENTIFIER_ROW_ID)
+    //     {
+    //       result->scanned_types.emplace_back(LogicalTypeId::BIGINT);
+    //     }
+    //     else
+    //     {
+    //       result->scanned_types.push_back(bind_data.all_types[col_idx]);
+    //     }
+    //   }
+    // }
+
+    // So right now the scanned_types is null
+
     return std::move(result);
   }
 
@@ -603,7 +638,7 @@ namespace duckdb
     // of the flight, ideally parameters would be JSON encoded.
 
     take_flight_function_with_descriptor.cardinality = take_flight_cardinality;
-    take_flight_function_with_descriptor.get_batch_index = nullptr;
+    //    take_flight_function_with_descriptor.get_batch_index = nullptr;
     take_flight_function_with_descriptor.projection_pushdown = true;
     take_flight_function_with_descriptor.filter_pushdown = false;
     take_flight_function_with_descriptor.table_scan_progress = take_flight_scan_progress;
@@ -625,7 +660,7 @@ namespace duckdb
     // of the flight, ideally parameters would be JSON encoded.
 
     take_flight_function_with_pointer.cardinality = take_flight_cardinality;
-    take_flight_function_with_pointer.get_batch_index = nullptr;
+    //    take_flight_function_with_pointer.get_batch_index = nullptr;
     take_flight_function_with_pointer.projection_pushdown = true;
     take_flight_function_with_pointer.filter_pushdown = false;
     take_flight_function_with_pointer.table_scan_progress = take_flight_scan_progress;

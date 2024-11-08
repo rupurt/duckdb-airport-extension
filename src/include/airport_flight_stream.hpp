@@ -33,6 +33,7 @@ namespace duckdb
     std::shared_ptr<flight::FlightInfo> flight_info_;
     std::shared_ptr<arrow::flight::FlightStreamReader> stream_;
     double progress_;
+    string last_app_metadata_;
   };
 
   struct AirportTakeFlightBindData : public ArrowScanFunctionData
@@ -47,6 +48,8 @@ namespace duckdb
 
     // This is the trace id so that calls to GetFlightInfo and DoGet can be traced.
     string trace_id;
+
+    idx_t row_id_column_index = COLUMN_IDENTIFIER_ROW_ID;
 
     // This is the auth token.
     string auth_token;

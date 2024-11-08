@@ -17,14 +17,14 @@ namespace flight = arrow::flight;
 namespace duckdb
 {
 
-  AirportTableEntry::AirportTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info)
-      : TableCatalogEntry(catalog, schema, info)
+  AirportTableEntry::AirportTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info, LogicalType rowid_type)
+      : TableCatalogEntry(catalog, schema, info, rowid_type)
   {
     this->internal = false;
   }
 
-  AirportTableEntry::AirportTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, AirportTableInfo &info)
-      : TableCatalogEntry(catalog, schema, *info.create_info)
+  AirportTableEntry::AirportTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, AirportTableInfo &info, LogicalType rowid_type)
+      : TableCatalogEntry(catalog, schema, *info.create_info, rowid_type)
   {
     this->internal = false;
   }

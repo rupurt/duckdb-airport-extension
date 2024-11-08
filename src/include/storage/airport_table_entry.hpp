@@ -33,8 +33,8 @@ namespace duckdb
   class AirportTableEntry : public TableCatalogEntry
   {
   public:
-    AirportTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info);
-    AirportTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, AirportTableInfo &info);
+    AirportTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info, LogicalType rowid_type);
+    AirportTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, AirportTableInfo &info, LogicalType rowid_type);
 
     unique_ptr<AirportAPITable> table_data;
 

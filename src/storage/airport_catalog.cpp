@@ -5,6 +5,7 @@
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/main/attached_database.hpp"
+#include "storage/airport_delete.hpp"
 
 namespace duckdb
 {
@@ -113,11 +114,7 @@ namespace duckdb
   {
     throw NotImplementedException("AirportCatalog PlanCreateTableAs");
   }
-  unique_ptr<PhysicalOperator> AirportCatalog::PlanDelete(ClientContext &context, LogicalDelete &op,
-                                                          unique_ptr<PhysicalOperator> plan)
-  {
-    throw NotImplementedException("AirportCatalog PlanDelete");
-  }
+
   unique_ptr<PhysicalOperator> AirportCatalog::PlanUpdate(ClientContext &context, LogicalUpdate &op,
                                                           unique_ptr<PhysicalOperator> plan)
   {
