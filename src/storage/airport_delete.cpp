@@ -150,8 +150,19 @@ namespace duckdb
     // we need do exchanges with the server chunk by chunk because if we batch everything
     // up it could use a lot of memory and we wouldn't be able to return the data
     // to the user.
-    auto appender = make_uniq<ArrowAppender>(gstate.send_types, chunk.size(), context.client.GetClientProperties());
-    appender->Append(chunk, 0, chunk.size(), chunk.size());
+
+    // Somehow we're getting a chunk with 2 columns,
+    // but we're only expecting one column.
+
+    // So it turns out the chunk that it passed may have additional colums included,
+    // especially if filtering is being applied, but we need to only send the row id column.
+    auto small_chunk = DataChunk();
+    small_chunk.Initialize(context.client, gstate.send_types, chunk.size());
+    small_chunk.data[0].Reference(chunk.data[row_id_index]);
+    small_chunk.SetCardinality(chunk.size());
+
+    auto appender = make_uniq<ArrowAppender>(gstate.send_types, small_chunk.size(), context.client.GetClientProperties());
+    appender->Append(small_chunk, 0, small_chunk.size(), small_chunk.size());
     ArrowArray arr = appender->Finalize();
 
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
@@ -259,7 +270,6 @@ namespace duckdb
       }
     }
 
-    gstate.Flush(context);
     return SinkFinalizeType::READY;
   }
 
@@ -330,6 +340,7 @@ namespace duckdb
   {
     auto &bound_ref = op.expressions[0]->Cast<BoundReferenceExpression>();
     // AirportCatalog::MaterializeAirportScans(*plan);
+
     auto del = make_uniq<AirportDelete>(op, op.table, bound_ref.index, op.return_chunk);
     del->children.push_back(std::move(plan));
     return std::move(del);

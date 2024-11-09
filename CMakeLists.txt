@@ -37,7 +37,7 @@ set(EXTENSION_SOURCES
   src/airport_headers.cpp
   src/storage/airport_exchange.cpp
   src/storage/airport_delete.cpp
-#  src/storage/airport_insert.cpp
+  src/storage/airport_insert.cpp
 )
 
 

@@ -53,8 +53,8 @@ namespace duckdb
   };
 
   void AirportExchangeGetGlobalSinkState(ClientContext &context,
-                                         TableCatalogEntry &table,
-                                         AirportTableEntry &airport_table,
+                                         const TableCatalogEntry &table,
+                                         const AirportTableEntry &airport_table,
                                          AirportExchangeGlobalState *global_state,
                                          ArrowSchema &send_schema,
                                          bool return_chunk,

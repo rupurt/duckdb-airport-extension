@@ -103,12 +103,6 @@ namespace duckdb
     schemas.ClearEntries();
   }
 
-  unique_ptr<PhysicalOperator> AirportCatalog::PlanInsert(ClientContext &context, LogicalInsert &op,
-                                                          unique_ptr<PhysicalOperator> plan)
-  {
-
-    throw NotImplementedException("AirportCatalog PlanInsert");
-  }
   unique_ptr<PhysicalOperator> AirportCatalog::PlanCreateTableAs(ClientContext &context, LogicalCreateTable &op,
                                                                  unique_ptr<PhysicalOperator> plan)
   {
