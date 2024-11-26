@@ -443,7 +443,6 @@ namespace duckdb
   {
     //! Generate Projection Pushdown Vector
     ArrowStreamParameters parameters;
-    D_ASSERT(!column_ids.empty());
     for (idx_t idx = 0; idx < column_ids.size(); idx++)
     {
       auto col_idx = column_ids[idx];

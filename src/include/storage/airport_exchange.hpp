@@ -58,5 +58,6 @@ namespace duckdb
                                          AirportExchangeGlobalState *global_state,
                                          ArrowSchema &send_schema,
                                          bool return_chunk,
-                                         string exchange_operation);
+                                         string exchange_operation,
+                                         vector<string> returning_column_names);
 }

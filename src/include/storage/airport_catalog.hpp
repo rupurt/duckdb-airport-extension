@@ -68,7 +68,7 @@ namespace duckdb
 
     DatabaseSize GetDatabaseSize(ClientContext &context) override;
 
-    //! Whether or not this is an in-memory UC database
+    //! Whether or not this is an in-memory database
     bool InMemory() override;
     string GetDBPath() override;
 

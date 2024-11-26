@@ -1,33 +1,19 @@
 #include "storage/airport_insert.hpp"
 #include "storage/airport_catalog.hpp"
 #include "storage/airport_transaction.hpp"
-#include "duckdb/planner/operator/logical_insert.hpp"
-#include "duckdb/planner/operator/logical_create_table.hpp"
 #include "storage/airport_table_entry.hpp"
-#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
-#include "duckdb/execution/operator/projection/physical_projection.hpp"
-#include "duckdb/execution/operator/scan/physical_table_scan.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "airport_extension.hpp"
 
-#include "arrow/array/array_dict.h"
-#include "arrow/array/array_nested.h"
-#include "arrow/array/builder_primitive.h"
-#include "arrow/buffer.h"
-#include "arrow/io/memory.h"
-#include "arrow/ipc/options.h"
-#include "arrow/ipc/reader.h"
-#include "arrow/ipc/type_fwd.h"
-#include "arrow/ipc/writer.h"
-#include "arrow/record_batch.h"
-#include "arrow/result.h"
-#include "arrow/status.h"
-#include "arrow/type_fwd.h"
-#include "arrow/c/bridge.h"
 #include "duckdb/common/arrow/schema_metadata.hpp"
 #include "duckdb/common/arrow/arrow_converter.hpp"
 #include "duckdb/common/arrow/arrow_appender.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/execution/operator/projection/physical_projection.hpp"
+#include "duckdb/execution/operator/scan/physical_table_scan.hpp"
+#include "duckdb/planner/operator/logical_insert.hpp"
+#include "duckdb/planner/operator/logical_create_table.hpp"
 
 #include "airport_flight_stream.hpp"
 #include "airport_take_flight.hpp"
@@ -164,29 +150,16 @@ namespace duckdb
 
     D_ASSERT(table != nullptr);
 
+    vector<string> returning_column_names;
+    for (auto &cd : table->GetColumns().Logical())
+    {
+      returning_column_names.push_back(cd.GetName());
+    }
+
     AirportExchangeGetGlobalSinkState(context, *table.get(), *insert_table, insert_global_state.get(),
-                                      send_schema, return_chunk, "insert");
+                                      send_schema, return_chunk, "insert",
+                                      returning_column_names);
 
-    // auto format = insert_table->GetCopyFormat(context);
-    // vector<string> insert_column_names;
-    // if (!insert_columns.empty())
-    // {
-    //   for (auto &str : insert_columns)
-    //   {
-    //     auto index = insert_table->GetColumnIndex(str, true);
-    //     if (!index.IsValid())
-    //     {
-    //       insert_column_names.push_back(str);
-    //     }
-    //     else
-    //     {
-    //       insert_column_names.push_back(insert_table->Airport_names[index.index]);
-    //     }
-    //   }
-    // }
-
-    // connection.BeginCopyTo(context, insert_global_state->copy_state, format, insert_table->schema.name, insert_table->name,
-    //                        insert_column_names);
     return std::move(insert_global_state);
   }
 
@@ -243,7 +216,10 @@ namespace duckdb
         ustate.insert_chunk.SetCardinality(state.chunk->arrow_array.length);
 
         ArrowTableFunction::ArrowToDuckDB(state,
-                                          data.arrow_table.GetColumns(), ustate.insert_chunk, data.lines_read - output_size, false);
+                                          data.arrow_table.GetColumns(),
+                                          ustate.insert_chunk,
+                                          data.lines_read - output_size,
+                                          false);
         ustate.insert_chunk.Verify();
         gstate.return_collection.Append(ustate.insert_chunk);
       }
@@ -367,59 +343,9 @@ namespace duckdb
     return result;
   }
 
-  //===--------------------------------------------------------------------===//
-  // Plan
-  //===--------------------------------------------------------------------===//
-  // unique_ptr<PhysicalOperator> AddCastToAirportTypes(ClientContext &context, unique_ptr<PhysicalOperator> plan)
-  // {
-  //   // check if we need to cast anything
-  //   bool require_cast = false;
-  //   auto &child_types = plan->GetTypes();
-  //   for (auto &type : child_types)
-  //   {
-  //     auto Airport_type = AirportUtils::ToAirportType(type);
-  //     if (Airport_type != type)
-  //     {
-  //       require_cast = true;
-  //       break;
-  //     }
-  //   }
-  //   if (require_cast)
-  //   {
-  //     vector<LogicalType> Airport_types;
-  //     vector<unique_ptr<Expression>> select_list;
-  //     for (idx_t i = 0; i < child_types.size(); i++)
-  //     {
-  //       auto &type = child_types[i];
-  //       unique_ptr<Expression> expr;
-  //       expr = make_uniq<BoundReferenceExpression>(type, i);
-
-  //       auto Airport_type = AirportUtils::ToAirportType(type);
-  //       if (Airport_type != type)
-  //       {
-  //         // add a cast
-  //         expr = BoundCastExpression::AddCastToType(context, std::move(expr), Airport_type);
-  //       }
-  //       Airport_types.push_back(std::move(Airport_type));
-  //       select_list.push_back(std::move(expr));
-  //     }
-  //     // we need to cast: add casts
-  //     auto proj = make_uniq<PhysicalProjection>(std::move(Airport_types), std::move(select_list),
-  //                                               plan->estimated_cardinality);
-  //     proj->children.push_back(std::move(plan));
-  //     plan = std::move(proj);
-  //   }
-
-  //   return plan;
-  // }
-
   unique_ptr<PhysicalOperator> AirportCatalog::PlanInsert(ClientContext &context, LogicalInsert &op,
                                                           unique_ptr<PhysicalOperator> plan)
   {
-    // if (op.return_chunk)
-    //{
-    //   throw BinderException("RETURNING clause not yet supported for insertion into Airport table");
-    // }
 
     if (op.action_type != OnConflictAction::THROW)
     {

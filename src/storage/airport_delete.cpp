@@ -15,20 +15,6 @@
 #include "airport_exception.hpp"
 #include "airport_secrets.hpp"
 
-#include "arrow/array/array_dict.h"
-#include "arrow/array/array_nested.h"
-#include "arrow/array/builder_primitive.h"
-#include "arrow/buffer.h"
-#include "arrow/io/memory.h"
-#include "arrow/ipc/options.h"
-#include "arrow/ipc/reader.h"
-#include "arrow/ipc/type_fwd.h"
-#include "arrow/ipc/writer.h"
-#include "arrow/record_batch.h"
-#include "arrow/result.h"
-#include "arrow/status.h"
-#include "arrow/type_fwd.h"
-#include "arrow/c/bridge.h"
 #include "duckdb/common/arrow/schema_metadata.hpp"
 
 #include "airport_flight_stream.hpp"
@@ -128,7 +114,14 @@ namespace duckdb
     ArrowConverter::ToArrowSchema(&send_schema, delete_global_state->send_types, send_names,
                                   context.GetClientProperties());
 
-    AirportExchangeGetGlobalSinkState(context, table, airport_table, delete_global_state.get(), send_schema, return_chunk, "delete");
+    vector<string> returning_column_names;
+    for (auto &cd : table.GetColumns().Logical())
+    {
+      returning_column_names.push_back(cd.GetName());
+    }
+
+    AirportExchangeGetGlobalSinkState(context, table, airport_table, delete_global_state.get(), send_schema, return_chunk, "delete",
+                                      returning_column_names);
 
     return std::move(delete_global_state);
   }
@@ -204,7 +197,9 @@ namespace duckdb
         //        D_ASSERT(data.arrow_table.GetColumns().size() == ustate.delete_chunk.ColumnCount());
 
         ArrowTableFunction::ArrowToDuckDB(state,
-                                          data.arrow_table.GetColumns(), ustate.delete_chunk, data.lines_read - output_size, false);
+                                          data.arrow_table.GetColumns(),
+                                          ustate.delete_chunk,
+                                          data.lines_read - output_size, false);
         ustate.delete_chunk.Verify();
         gstate.return_collection.Append(ustate.delete_chunk);
       }

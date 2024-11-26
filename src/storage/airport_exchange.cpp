@@ -71,18 +71,10 @@ namespace duckdb
                                          AirportExchangeGlobalState *global_state,
                                          ArrowSchema &send_schema,
                                          bool return_chunk,
-                                         string exchange_operation)
+                                         string exchange_operation,
+                                         vector<string> destination_chunk_column_names)
   {
-    //    auto global_state = make_uniq<AirportDeleteGlobalState>(context, airport_table, GetTypes(), return_chunk);
-
-    //    global_state->send_types = {airport_table.GetRowIdType()};
-    //    vector<string> send_names = {"row_id"};
-    //   ArrowSchema send_schema;
-    //  ArrowConverter::ToArrowSchema(&send_schema, global_state->send_types, send_names,
-    //                                 context.GetClientProperties());
-    // Create the C++ schema.
     global_state->schema = arrow::ImportSchema(&send_schema).ValueOrDie();
-    //    global_state->return_chunk = return_chunk;
     global_state->flight_descriptor = airport_table.table_data->flight_info->descriptor();
 
     auto auth_token = AirportAuthTokenForLocation(context, airport_table.table_data->location, "", "");
@@ -163,100 +155,135 @@ namespace duckdb
     scan_bind_data->server_location = airport_table.table_data->location;
     scan_bind_data->trace_id = trace_uuid;
 
-    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto read_schema,
-                                                       scan_bind_data->scan_data->stream_->GetSchema(),
-                                                       airport_table.table_data->location,
-                                                       global_state->flight_descriptor, "");
-
-    auto &data = *scan_bind_data;
-    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(
-        ExportSchema(*read_schema, &data.schema_root.arrow_schema),
-        airport_table.table_data->location,
-        global_state->flight_descriptor,
-        "ExportSchema");
-
-    // Get a list of the real columns on the table, so that their
-    // offsets can be looked up from how the schema is returned.
-    vector<string> real_table_names;
-    for (auto &cd : table.GetColumns().Logical())
-    {
-      real_table_names.push_back(cd.GetName());
-    }
-
     vector<column_t> column_ids;
 
-    idx_t row_id_col_idx = -1;
-    for (idx_t col_idx = 0;
-         col_idx < (idx_t)data.schema_root.arrow_schema.n_children; col_idx++)
+    if (return_chunk)
     {
-      auto &schema = *data.schema_root.arrow_schema.children[col_idx];
-      if (!schema.release)
-      {
-        throw InvalidInputException("airport_delete: released schema passed");
-      }
-      auto arrow_type = ArrowTableFunction::GetArrowLogicalType(schema);
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto read_schema,
+                                                         scan_bind_data->scan_data->stream_->GetSchema(),
+                                                         airport_table.table_data->location,
+                                                         global_state->flight_descriptor, "");
 
-      // Determine if the column is the row_id column by looking at the metadata
-      // on the column.
-      bool is_row_id_column = false;
-      if (schema.metadata != nullptr)
-      {
-        auto column_metadata = ArrowSchemaMetadata(schema.metadata);
+      // printf("Schema of reader stream is:\n----------\n%s\n---------\n", read_schema->ToString().c_str());
 
-        auto comment = column_metadata.GetOption("is_row_id");
-        if (!comment.empty())
+      auto &data = *scan_bind_data;
+      AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(
+          ExportSchema(*read_schema, &data.schema_root.arrow_schema),
+          airport_table.table_data->location,
+          global_state->flight_descriptor,
+          "ExportSchema");
+
+      vector<string> reading_arrow_column_names;
+      for (idx_t col_idx = 0;
+           col_idx < (idx_t)data.schema_root.arrow_schema.n_children; col_idx++)
+      {
+        auto &schema = *data.schema_root.arrow_schema.children[col_idx];
+        if (!schema.release)
         {
-          is_row_id_column = true;
-          scan_bind_data->row_id_column_index = col_idx;
+          throw InvalidInputException("airport_exchange: released schema passed");
         }
+        auto name = string(schema.name);
+        if (name.empty())
+        {
+          name = string("v") + to_string(col_idx);
+        }
+
+        reading_arrow_column_names.push_back(name);
       }
 
-      if (schema.dictionary)
+      // printf("Arrow schema column names are: %s\n", join_vector_of_strings(reading_arrow_column_names, ',').c_str());
+      // printf("Expected order of columns to be: %s\n", join_vector_of_strings(destination_chunk_column_names, ',').c_str());
+
+      vector<string> arrow_types;
+      for (idx_t col_idx = 0;
+           col_idx < (idx_t)data.schema_root.arrow_schema.n_children; col_idx++)
       {
-        auto dictionary_type = ArrowTableFunction::GetArrowLogicalType(*schema.dictionary);
+        auto &schema = *data.schema_root.arrow_schema.children[col_idx];
+        if (!schema.release)
+        {
+          throw InvalidInputException("airport_exchange: released schema passed");
+        }
+        auto arrow_type = ArrowTableFunction::GetArrowLogicalType(schema);
+        arrow_types.push_back(arrow_type->GetDuckType().ToString());
+      }
+
+      for (auto output_index = 0; output_index < destination_chunk_column_names.size(); output_index++)
+      {
+        auto found_index = findIndex(reading_arrow_column_names, destination_chunk_column_names[output_index]);
+        if (exchange_operation != "update")
+        {
+          column_ids.push_back(found_index);
+        }
+        else
+        {
+          // This is right for outputs, because it allowed the read chunk to happen.
+          column_ids.push_back(output_index);
+        }
+        // printf("Output data chunk column %s (type=%s) (%d) comes from arrow column index index %d\n",
+        //        destination_chunk_column_names[output_index].c_str(),
+        //        arrow_types[found_index].c_str(),
+        //        output_index,
+        //        found_index);
+      }
+
+      // idx_t row_id_col_idx = -1;
+      for (idx_t col_idx = 0;
+           col_idx < (idx_t)data.schema_root.arrow_schema.n_children; col_idx++)
+      {
+        auto &schema = *data.schema_root.arrow_schema.children[col_idx];
+        if (!schema.release)
+        {
+          throw InvalidInputException("airport_exchange: released schema passed");
+        }
+        auto arrow_type = ArrowTableFunction::GetArrowLogicalType(schema);
+
+        // Determine if the column is the row_id column by looking at the metadata
+        // on the column.
+        bool is_row_id_column = false;
+        if (schema.metadata != nullptr)
+        {
+          auto column_metadata = ArrowSchemaMetadata(schema.metadata);
+
+          auto comment = column_metadata.GetOption("is_row_id");
+          if (!comment.empty())
+          {
+            is_row_id_column = true;
+            scan_bind_data->row_id_column_index = col_idx;
+          }
+        }
+
+        if (schema.dictionary)
+        {
+          auto dictionary_type = ArrowTableFunction::GetArrowLogicalType(*schema.dictionary);
+          if (!is_row_id_column)
+          {
+            scan_bind_data->return_types.emplace_back(dictionary_type->GetDuckType());
+          }
+          arrow_type->SetDictionary(std::move(dictionary_type));
+        }
+        else
+        {
+          if (!is_row_id_column)
+          {
+            scan_bind_data->return_types.emplace_back(arrow_type->GetDuckType());
+          }
+        }
+
+        auto name = string(schema.name);
+
+        // printf("Setting arrow column index %llu to data %s\n", is_row_id_column ? COLUMN_IDENTIFIER_ROW_ID : col_idx, arrow_type->GetDuckType().ToString().c_str());
+        scan_bind_data->arrow_table.AddColumn(is_row_id_column ? COLUMN_IDENTIFIER_ROW_ID : col_idx, std::move(arrow_type));
+
+        auto format = string(schema.format);
+        if (name.empty())
+        {
+          name = string("v") + to_string(col_idx);
+        }
+
         if (!is_row_id_column)
         {
-          scan_bind_data->return_types.emplace_back(dictionary_type->GetDuckType());
+          scan_bind_data->names.push_back(name);
         }
-        arrow_type->SetDictionary(std::move(dictionary_type));
-      }
-      else
-      {
-        if (!is_row_id_column)
-        {
-          scan_bind_data->return_types.emplace_back(arrow_type->GetDuckType());
-        }
-      }
-
-      scan_bind_data->arrow_table.AddColumn(is_row_id_column ? COLUMN_IDENTIFIER_ROW_ID : col_idx, std::move(arrow_type));
-
-      // FIXME: determine if bind should include the row_id column.
-
-      auto format = string(schema.format);
-      auto name = string(schema.name);
-      if (name.empty())
-      {
-        name = string("v") + to_string(col_idx);
-      }
-
-      if (!is_row_id_column)
-      {
-        scan_bind_data->names.push_back(name);
-        column_ids.emplace_back(findIndex(real_table_names, name));
-      }
-      else
-      {
-        row_id_col_idx = col_idx;
-      }
-    }
-
-    // Since the server may provide row_id but returning doesn't include it we need to
-    // adjust the index of the data columns to be shifted by 1.
-    if (row_id_col_idx != -1)
-    {
-      for (size_t i = row_id_col_idx; i < column_ids.size(); ++i)
-      {
-        column_ids[i] += 1;
       }
     }
 
@@ -307,5 +334,4 @@ namespace duckdb
         global_state->scan_local_state.get(),
         global_state->scan_global_state.get());
   }
-
 }
