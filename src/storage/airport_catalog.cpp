@@ -109,11 +109,6 @@ namespace duckdb
     throw NotImplementedException("AirportCatalog PlanCreateTableAs");
   }
 
-  // unique_ptr<PhysicalOperator> AirportCatalog::PlanUpdate(ClientContext &context, LogicalUpdate &op,
-  //                                                         unique_ptr<PhysicalOperator> plan)
-  // {
-  //   throw NotImplementedException("AirportCatalog PlanUpdate");
-  // }
   unique_ptr<LogicalOperator> AirportCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
                                                               unique_ptr<LogicalOperator> plan)
   {

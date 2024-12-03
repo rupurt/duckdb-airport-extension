@@ -414,7 +414,7 @@ namespace duckdb
     for (auto id : get.GetColumnIds())
     {
       // So there can be a special column id specified called rowid.
-      yyjson_mut_arr_add_str(doc, column_id_names, id == COLUMN_IDENTIFIER_ROW_ID ? "rowid" : get.names[id].c_str());
+      yyjson_mut_arr_add_str(doc, column_id_names, id.IsRowIdColumn() ? "rowid" : get.names[id.GetPrimaryIndex()].c_str());
     }
 
     yyjson_mut_obj_add_val(doc, result_obj, "filters", filters_arr);
