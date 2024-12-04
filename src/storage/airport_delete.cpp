@@ -14,6 +14,7 @@
 #include "airport_headers.hpp"
 #include "airport_exception.hpp"
 #include "airport_secrets.hpp"
+#include "storage/airport_delete_parameterized.hpp"
 
 #include "duckdb/common/arrow/schema_metadata.hpp"
 
@@ -335,6 +336,18 @@ namespace duckdb
   {
     auto &bound_ref = op.expressions[0]->Cast<BoundReferenceExpression>();
     // AirportCatalog::MaterializeAirportScans(*plan);
+
+    if (op.table.GetRowIdType() == LogicalType::SQLNULL)
+    {
+      if (op.return_chunk)
+      {
+        throw BinderException("RETURNING clause not yet supported for parameterized delete using an Airport table");
+      }
+
+      auto del = make_uniq<AirportDeleteParameterized>(op, op.table, *plan);
+      del->children.push_back(std::move(plan));
+      return std::move(del);
+    }
 
     auto del = make_uniq<AirportDelete>(op, op.table, bound_ref.index, op.return_chunk);
     del->children.push_back(std::move(plan));

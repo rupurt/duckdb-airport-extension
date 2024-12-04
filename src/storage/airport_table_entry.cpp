@@ -36,45 +36,6 @@ namespace duckdb
     return nullptr;
   }
 
-  // void AirportTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &, LogicalProjection &, LogicalUpdate &,
-  //                                               ClientContext &)
-  // {
-  //   	// check the constraints and indexes of the table to see if we need to project any additional columns
-  // // we do this for indexes with multiple columns and CHECK constraints in the UPDATE clause
-  // // suppose we have a constraint CHECK(i + j < 10); now we need both i and j to check the constraint
-  // // if we are only updating one of the two columns we add the other one to the UPDATE set
-  // // with a "useless" update (i.e. i=i) so we can verify that the CHECK constraint is not violated
-  // auto bound_constraints = binder.BindConstraints(constraints, name, columns);
-  // for (auto &constraint : bound_constraints) {
-  // 	if (constraint->type == ConstraintType::CHECK) {
-  // 		auto &check = constraint->Cast<BoundCheckConstraint>();
-  // 		// check constraint! check if we need to add any extra columns to the UPDATE clause
-  // 		BindExtraColumns(*this, get, proj, update, check.bound_columns);
-  // 	}
-  // }
-  // if (update.return_chunk) {
-  // 	physical_index_set_t all_columns;
-  // 	for (auto &column : GetColumns().Physical()) {
-  // 		all_columns.insert(column.Physical());
-  // 	}
-  // 	BindExtraColumns(*this, get, proj, update, all_columns);
-  // }
-  // // for index updates we always turn any update into an insert and a delete
-  // // we thus need all the columns to be available, hence we check if the update touches any index columns
-  // // If the returning keyword is used, we need access to the whole row in case the user requests it.
-  // // Therefore switch the update to a delete and insert.
-  // update.update_is_del_and_insert = false;
-  // TableStorageInfo table_storage_info = GetStorageInfo(context);
-  // for (auto index : table_storage_info.index_info) {
-  // 	for (auto &column : update.columns) {
-  // 		if (index.column_set.find(column.index) != index.column_set.end()) {
-  // 			update.update_is_del_and_insert = true;
-  // 			break;
-  // 		}
-  // 	}
-  // };
-  // }
-
   TableFunction AirportTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data)
   {
     auto &db = DatabaseInstance::GetDatabase(context);

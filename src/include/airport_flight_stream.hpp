@@ -54,6 +54,14 @@ namespace duckdb
     // This is the auth token.
     string auth_token;
     mutable mutex lock;
+
+    // Force no-result
+    // When issuing updates and deletes on tables that cannot produce row ids
+    // it sometimes make sense that while the LogicalGet node will exist, this
+    // Get shouldn't actually produce any rows.
+    //
+    // Its assumed that the work will be done in the LogicalUpdate or LogicalDelete
+    bool skip_producing_result_for_update_or_delete = false;
   };
 
   struct AirportFlightStreamReader : public arrow::RecordBatchReader

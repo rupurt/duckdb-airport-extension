@@ -39,6 +39,9 @@ set(EXTENSION_SOURCES
   src/storage/airport_delete.cpp
   src/storage/airport_insert.cpp
   src/storage/airport_update.cpp
+  src/storage/airport_delete_parameterized.cpp
+  src/storage/airport_update_parameterized.cpp
+  src/airport_optimizer.cpp
 )
 
 

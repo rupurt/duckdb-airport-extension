@@ -17,6 +17,7 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
 #include "airport_macros.hpp"
+#include "storage/airport_update_parameterized.hpp"
 #include "airport_headers.hpp"
 #include "airport_exception.hpp"
 #include "airport_secrets.hpp"
@@ -422,6 +423,19 @@ namespace duckdb
         throw BinderException("SET DEFAULT is not yet supported for updates of a Airport table");
       }
     }
+
+    if (op.table.GetRowIdType() == LogicalType::SQLNULL)
+    {
+      if (op.return_chunk)
+      {
+        throw BinderException("RETURNING clause not yet supported for parameterized update of an Airport table");
+      }
+
+      auto upd = make_uniq<AirportUpdateParameterized>(op, op.table, *plan);
+      upd->children.push_back(std::move(plan));
+      return std::move(upd);
+    }
+
     auto update = make_uniq<AirportUpdate>(op,
                                            op.types,
                                            op.table,

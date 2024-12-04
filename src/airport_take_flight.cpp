@@ -543,6 +543,14 @@ namespace duckdb
 
     call_options.headers.emplace_back("airport-trace-id", bind_data.trace_id);
 
+    if (bind_data.skip_producing_result_for_update_or_delete)
+    {
+      // This is a special case where the result of the scan should be skipped.
+      // This is useful when the scan is being used to update or delete rows.
+      // For a table that doesn't actually produce row ids, so filtering cannot be applied.
+      call_options.headers.emplace_back("airport-skip-producing-results", "1");
+    }
+
     // Rather than using the headers, check to see if the ticket starts with <TICKET_ALLOWS_METADATA>
 
     auto server_ticket = bind_data.scan_data->flight_info_->endpoints()[0].ticket;
@@ -582,7 +590,6 @@ namespace duckdb
         "");
 
     //    bind_data.scan_data->stream_ = std::move(flight_stream);
-
     result->stream = AirportProduceArrowScan(bind_data, input.column_ids, input.filters.get());
 
     // Since we're single threaded, we can only really use a single thread at a time.

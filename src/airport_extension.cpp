@@ -11,6 +11,7 @@
 #include "storage/airport_catalog.hpp"
 #include "storage/airport_transaction_manager.hpp"
 #include "airport_secrets.hpp"
+#include "airport_optimizer.hpp"
 #include <curl/curl.h>
 
 namespace duckdb
@@ -135,6 +136,10 @@ namespace duckdb
 
         auto &config = DBConfig::GetConfig(instance);
         config.storage_extensions["airport"] = make_uniq<AirportCatalogStorageExtension>();
+
+        OptimizerExtension airport_optimizer;
+        airport_optimizer.optimize_function = AirportOptimizer::Optimize;
+        config.optimizer_extensions.push_back(std::move(airport_optimizer));
     }
 
     void AirportExtension::Load(DuckDB &db)
