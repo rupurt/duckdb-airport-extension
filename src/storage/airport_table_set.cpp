@@ -5,6 +5,7 @@
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/parser/constraints/unique_constraint.hpp"
+#include "duckdb/parser/constraints/check_constraint.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/catalog/dependency_list.hpp"
@@ -18,6 +19,9 @@
 #include "duckdb/function/table/arrow.hpp"
 #include "duckdb/common/arrow/schema_metadata.hpp"
 #include "storage/airport_curl_pool.hpp"
+#include "yyjson.hpp"
+
+using namespace duckdb_yyjson; // NOLINT
 
 namespace duckdb
 {
@@ -70,6 +74,60 @@ namespace duckdb
       vector<string> not_null_columns;
 
       LogicalType row_id_type = LogicalType(LogicalType::ROW_TYPE);
+
+      if (arrow_schema.metadata != nullptr)
+      {
+        auto schema_metadata = ArrowSchemaMetadata(arrow_schema.metadata);
+
+        auto check_constraints = schema_metadata.GetOption("check_constraints");
+        if (!check_constraints.empty())
+        {
+          yyjson_doc *doc = yyjson_read(check_constraints.c_str(), check_constraints.size(), 0);
+          if (doc)
+          {
+            // Get the root of the JSON document
+            yyjson_val *root = yyjson_doc_get_root(doc);
+
+            // Ensure the root is an object (dictionary)
+            if (root && yyjson_is_arr(root))
+            {
+              size_t idx, max;
+              yyjson_val *val;
+              yyjson_arr_foreach(root, idx, max, val)
+              {
+                if (yyjson_is_str(val))
+                {
+                  string expression = yyjson_get_str(val);
+
+                  auto expression_list = Parser::ParseExpressionList(expression, context.GetParserOptions());
+                  if (expression_list.size() != 1)
+                  {
+                    throw ParserException("Failed to parse CHECK constraint expression: " + expression + " for table " + table.name);
+                  }
+                  info.constraints.emplace_back(make_uniq<CheckConstraint>(std::move(expression_list[0])));
+                }
+                else
+                {
+                  yyjson_doc_free(doc);
+                  throw ParserException("Encountered non string element in CHECK constraints for table  " + table.name);
+                }
+              }
+            }
+            else
+            {
+              // Free the JSON document after parsing
+              yyjson_doc_free(doc);
+              throw ParserException("Failed to parse check constraints JSON for table " + table.name + " is not an array");
+            }
+            // Free the JSON document after parsing
+            yyjson_doc_free(doc);
+          }
+          else
+          {
+            throw ParserException("Failed to parse check constraints as JSON for table " + table.name);
+          }
+        }
+      }
 
       for (idx_t col_idx = 0;
            col_idx < (idx_t)arrow_schema.n_children; col_idx++)

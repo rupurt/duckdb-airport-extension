@@ -4,6 +4,7 @@
 #include "duckdb/planner/constraints/bound_check_constraint.hpp"
 #include "duckdb/planner/constraints/bound_unique_constraint.hpp"
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
+#include "duckdb/parser/constraints/check_constraint.hpp"
 
 #include "duckdb/storage/table/append_state.hpp"
 
@@ -52,7 +53,7 @@ namespace duckdb
   // }
 
   static void VerifyCheckConstraint(ClientContext &context, TableCatalogEntry &table, Expression &expr,
-                                    DataChunk &chunk)
+                                    DataChunk &chunk, CheckConstraint &check)
   {
     ExpressionExecutor executor(context, expr);
     Vector result(LogicalType::INTEGER);
@@ -63,12 +64,12 @@ namespace duckdb
     catch (std::exception &ex)
     {
       ErrorData error(ex);
-      throw ConstraintException("CHECK constraint failed: %s (Error: %s)", table.name, error.RawMessage());
+      throw ConstraintException("CHECK constraint failed on table %s with expression %s (Error: %s)", table.name, check.ToString(), error.RawMessage());
     }
     catch (...)
     {
       // LCOV_EXCL_START
-      throw ConstraintException("CHECK constraint failed: %s (Unknown Error)", table.name);
+      throw ConstraintException("CHECK constraint failed on table %s with expression %s (Unknown Error)", table.name, check.ToString());
     } // LCOV_EXCL_STOP
     UnifiedVectorFormat vdata;
     result.ToUnifiedFormat(chunk.size(), vdata);
@@ -79,7 +80,7 @@ namespace duckdb
       auto idx = vdata.sel->get_index(i);
       if (vdata.validity.RowIsValid(idx) && dataptr[idx] == 0)
       {
-        throw ConstraintException("CHECK constraint failed: %s", table.name);
+        throw ConstraintException("CHECK constraint failed on table %s with expression: %s", table.name, check.ToString());
       }
     }
   }
@@ -148,7 +149,8 @@ namespace duckdb
       case ConstraintType::CHECK:
       {
         auto &check = constraint->Cast<BoundCheckConstraint>();
-        VerifyCheckConstraint(context, table, *check.expression, chunk);
+        auto &unbound_constraint = base_constraint->Cast<CheckConstraint>();
+        VerifyCheckConstraint(context, table, *check.expression, chunk, unbound_constraint);
         break;
       }
       case ConstraintType::UNIQUE:
