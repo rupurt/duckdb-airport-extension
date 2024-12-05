@@ -63,18 +63,13 @@ namespace duckdb
         : table(table), insert_count(0),
           return_collection(context, return_types), return_chunk(return_chunk)
     {
-      if (table)
-      {
-        insert_chunk.Initialize(Allocator::Get(context), table->GetTypes());
-      }
-      else
+      if (!table)
       {
         throw NotImplementedException("AirportInsertGlobalState: table is null");
       }
     }
 
     AirportTableEntry *table;
-    DataChunk insert_chunk;
     idx_t insert_count;
     mutex insert_lock;
 
@@ -92,7 +87,7 @@ namespace duckdb
                             const vector<unique_ptr<BoundConstraint>> &bound_constraints)
         : default_executor(context, bound_defaults), bound_constraints(bound_constraints)
     {
-      insert_chunk.Initialize(Allocator::Get(context), table.GetTypes());
+      returning_data_chunk.Initialize(Allocator::Get(context), table.GetTypes());
     }
 
     ConstraintState &GetConstraintState(TableCatalogEntry &table, TableCatalogEntry &tableref);
@@ -100,7 +95,7 @@ namespace duckdb
     const vector<unique_ptr<BoundConstraint>> &bound_constraints;
     unique_ptr<ConstraintState> constraint_state;
 
-    DataChunk insert_chunk;
+    DataChunk returning_data_chunk;
   };
 
   ConstraintState &AirportInsertLocalState::GetConstraintState(TableCatalogEntry &table, TableCatalogEntry &tableref)
@@ -117,10 +112,8 @@ namespace duckdb
     vector<string> column_names;
     vector<LogicalType> column_types;
     auto &columns = entry.GetColumns();
-    idx_t column_count;
     if (!insert.column_index_map.empty())
     {
-      column_count = 0;
       vector<PhysicalIndex> column_indexes;
       column_indexes.resize(columns.LogicalColumnCount(), PhysicalIndex(DConstants::INVALID_INDEX));
       for (idx_t c = 0; c < insert.column_index_map.size(); c++)
@@ -133,14 +126,13 @@ namespace duckdb
           continue;
         }
         column_indexes[mapped_index] = column_index;
-        column_count++;
       }
-      for (idx_t c = 0; c < column_count; c++)
-      {
-        auto &col = columns.GetColumn(column_indexes[c]);
 
-        // Not only do I need the names and I need the types.
-        column_types.push_back(col.Type());
+      // Since we are supporting default values now, we want to end all columns of the table.
+      // rather than just the columns the user has specified.
+      for (auto &col : entry.GetColumns().Logical())
+      {
+        column_types.push_back(col.GetType());
         column_names.push_back(col.GetName());
       }
     }
@@ -211,6 +203,48 @@ namespace duckdb
     return 0;
   }
 
+  void AirportInsert::ResolveDefaults(const TableCatalogEntry &table, DataChunk &chunk,
+                                      const physical_index_vector_t<idx_t> &column_index_map,
+                                      ExpressionExecutor &default_executor, DataChunk &result)
+  {
+    chunk.Flatten();
+    default_executor.SetChunk(chunk);
+
+    result.Reset();
+    result.SetCardinality(chunk);
+
+    if (!column_index_map.empty())
+    {
+      // columns specified by the user, use column_index_map
+      for (auto &col : table.GetColumns().Physical())
+      {
+        auto storage_idx = col.StorageOid();
+        auto mapped_index = column_index_map[col.Physical()];
+        if (mapped_index == DConstants::INVALID_INDEX)
+        {
+          // insert default value
+          default_executor.ExecuteExpression(storage_idx, result.data[storage_idx]);
+        }
+        else
+        {
+          // get value from child chunk
+          D_ASSERT((idx_t)mapped_index < chunk.ColumnCount());
+          D_ASSERT(result.data[storage_idx].GetType() == chunk.data[mapped_index].GetType());
+          result.data[storage_idx].Reference(chunk.data[mapped_index]);
+        }
+      }
+    }
+    else
+    {
+      // no columns specified, just append directly
+      for (idx_t i = 0; i < result.ColumnCount(); i++)
+      {
+        D_ASSERT(result.data[i].GetType() == chunk.data[i].GetType());
+        result.data[i].Reference(chunk.data[i]);
+      }
+    }
+  }
+
   //===--------------------------------------------------------------------===//
   // Sink
   //===--------------------------------------------------------------------===//
@@ -219,14 +253,15 @@ namespace duckdb
     auto &gstate = input.global_state.Cast<AirportInsertGlobalState>();
     auto &ustate = input.local_state.Cast<AirportInsertLocalState>();
 
-    // FIXME: do this in the future.
-    // PhysicalInsert::ResolveDefaults(table, chunk, column_index_map, lstate.default_executor, lstate.insert_chunk);
+    // So this is going to write the data into the returning_data_chunk
+    // which has all table columns.
+    AirportInsert::ResolveDefaults(*gstate.table, chunk, column_index_map, ustate.default_executor, ustate.returning_data_chunk);
 
     // So there is some confusion about which columns are at a particular index.
-    OnConflictHandling(*gstate.table, context, gstate, ustate, chunk);
+    OnConflictHandling(*gstate.table, context, gstate, ustate, ustate.returning_data_chunk);
 
-    auto appender = make_uniq<ArrowAppender>(gstate.send_types, chunk.size(), context.client.GetClientProperties());
-    appender->Append(chunk, 0, chunk.size(), chunk.size());
+    auto appender = make_uniq<ArrowAppender>(gstate.send_types, ustate.returning_data_chunk.size(), context.client.GetClientProperties());
+    appender->Append(ustate.returning_data_chunk, 0, ustate.returning_data_chunk.size(), ustate.returning_data_chunk.size());
     ArrowArray arr = appender->Finalize();
 
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
@@ -247,7 +282,7 @@ namespace duckdb
     // Since we wrote a batch I'd like to read the data returned if we are returning chunks.
     if (gstate.return_chunk)
     {
-      ustate.insert_chunk.Reset();
+      ustate.returning_data_chunk.Reset();
 
       {
         auto &data = gstate.scan_table_function_input->bind_data->CastNoConst<ArrowScanFunctionData>(); // FIXME
@@ -262,15 +297,15 @@ namespace duckdb
         auto output_size =
             MinValue<idx_t>(STANDARD_VECTOR_SIZE, NumericCast<idx_t>(state.chunk->arrow_array.length) - state.chunk_offset);
         data.lines_read += output_size;
-        ustate.insert_chunk.SetCardinality(state.chunk->arrow_array.length);
+        ustate.returning_data_chunk.SetCardinality(state.chunk->arrow_array.length);
 
         ArrowTableFunction::ArrowToDuckDB(state,
                                           data.arrow_table.GetColumns(),
-                                          ustate.insert_chunk,
+                                          ustate.returning_data_chunk,
                                           data.lines_read - output_size,
                                           false);
-        ustate.insert_chunk.Verify();
-        gstate.return_collection.Append(ustate.insert_chunk);
+        ustate.returning_data_chunk.Verify();
+        gstate.return_collection.Append(ustate.returning_data_chunk);
       }
     }
 

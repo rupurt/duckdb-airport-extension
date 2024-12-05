@@ -206,6 +206,16 @@ namespace duckdb
           {
             column_def.SetComment(duckdb::Value(comment));
           }
+
+          auto default_value = column_metadata.GetOption("default");
+
+          if (!default_value.empty()) {
+            auto expressions = Parser::ParseExpressionList(default_value);
+            if (expressions.empty()) {
+              throw InternalException("Expression list is empty when parsing default value for column %s", column.name);
+            }
+            column_def.SetDefaultValue(std::move(expressions[0]));
+          }
         }
 
         info.columns.AddColumn(std::move(column_def));

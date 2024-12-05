@@ -58,6 +58,11 @@ namespace duckdb
                              AirportInsertLocalState &lstate,
                              DataChunk &chunk) const;
 
+  private:
+    static void ResolveDefaults(const TableCatalogEntry &table, DataChunk &chunk,
+                                const physical_index_vector_t<idx_t> &column_index_map,
+                                ExpressionExecutor &default_executor, DataChunk &result);
+
   public:
     // Sink interface
     unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
