@@ -23,6 +23,8 @@
 #include "airport_headers.hpp"
 #include "airport_exception.hpp"
 #include "airport_secrets.hpp"
+#include "airport_constraints.hpp"
+#include "duckdb/storage/table/append_state.hpp"
 
 using namespace duckdb_yyjson; // NOLINT
 
@@ -31,9 +33,12 @@ namespace duckdb
 
   AirportInsert::AirportInsert(LogicalOperator &op, TableCatalogEntry &table,
                                physical_index_vector_t<idx_t> column_index_map_p,
-                               bool return_chunk)
+                               bool return_chunk,
+                               vector<unique_ptr<Expression>> bound_defaults,
+                               vector<unique_ptr<BoundConstraint>> bound_constraints_p)
       : PhysicalOperator(PhysicalOperatorType::EXTENSION, op.types, 1), table(&table), schema(nullptr),
-        column_index_map(std::move(column_index_map_p)), return_chunk(return_chunk)
+        column_index_map(std::move(column_index_map_p)), return_chunk(return_chunk),
+        bound_defaults(std::move(bound_defaults)), bound_constraints(std::move(bound_constraints_p))
   {
   }
 
@@ -81,12 +86,31 @@ namespace duckdb
   class AirportInsertLocalState : public LocalSinkState
   {
   public:
-    AirportInsertLocalState(ClientContext &context, const TableCatalogEntry &table)
+    AirportInsertLocalState(ClientContext &context,
+                            const TableCatalogEntry &table,
+                            const vector<unique_ptr<Expression>> &bound_defaults,
+                            const vector<unique_ptr<BoundConstraint>> &bound_constraints)
+        : default_executor(context, bound_defaults), bound_constraints(bound_constraints)
     {
       insert_chunk.Initialize(Allocator::Get(context), table.GetTypes());
     }
+
+    ConstraintState &GetConstraintState(TableCatalogEntry &table, TableCatalogEntry &tableref);
+    ExpressionExecutor default_executor;
+    const vector<unique_ptr<BoundConstraint>> &bound_constraints;
+    unique_ptr<ConstraintState> constraint_state;
+
     DataChunk insert_chunk;
   };
+
+  ConstraintState &AirportInsertLocalState::GetConstraintState(TableCatalogEntry &table, TableCatalogEntry &tableref)
+  {
+    if (!constraint_state)
+    {
+      constraint_state = make_uniq<ConstraintState>(table, bound_constraints);
+    }
+    return *constraint_state;
+  }
 
   static pair<vector<string>, vector<LogicalType>> AirportGetInsertColumns(const AirportInsert &insert, AirportTableEntry &entry)
   {
@@ -144,6 +168,7 @@ namespace duckdb
     auto [send_names, send_types] = AirportGetInsertColumns(*this, *insert_table);
 
     insert_global_state->send_types = send_types;
+    insert_global_state->send_names = send_names;
     ArrowSchema send_schema;
     ArrowConverter::ToArrowSchema(&send_schema, insert_global_state->send_types, send_names,
                                   context.GetClientProperties());
@@ -165,7 +190,25 @@ namespace duckdb
 
   unique_ptr<LocalSinkState> AirportInsert::GetLocalSinkState(ExecutionContext &context) const
   {
-    return make_uniq<AirportInsertLocalState>(context.client, *table.get());
+    return make_uniq<AirportInsertLocalState>(context.client,
+                                              *table.get(),
+                                              bound_defaults,
+                                              bound_constraints);
+  }
+
+  idx_t AirportInsert::OnConflictHandling(TableCatalogEntry &table,
+                                          ExecutionContext &context,
+                                          AirportInsertGlobalState &gstate,
+                                          AirportInsertLocalState &lstate,
+                                          DataChunk &chunk) const
+  {
+    if (action_type == OnConflictAction::THROW)
+    {
+      auto &constraint_state = lstate.GetConstraintState(table, table);
+      AirportVerifyAppendConstraints(constraint_state, context.client, chunk, nullptr, gstate.send_names);
+      return 0;
+    }
+    return 0;
   }
 
   //===--------------------------------------------------------------------===//
@@ -175,6 +218,12 @@ namespace duckdb
   {
     auto &gstate = input.global_state.Cast<AirportInsertGlobalState>();
     auto &ustate = input.local_state.Cast<AirportInsertLocalState>();
+
+    // FIXME: do this in the future.
+    // PhysicalInsert::ResolveDefaults(table, chunk, column_index_map, lstate.default_executor, lstate.insert_chunk);
+
+    // So there is some confusion about which columns are at a particular index.
+    OnConflictHandling(*gstate.table, context, gstate, ustate, chunk);
 
     auto appender = make_uniq<ArrowAppender>(gstate.send_types, chunk.size(), context.client.GetClientProperties());
     appender->Append(chunk, 0, chunk.size(), chunk.size());
@@ -354,7 +403,14 @@ namespace duckdb
 
     //    plan = AddCastToAirportTypes(context, std::move(plan));
 
-    auto insert = make_uniq<AirportInsert>(op, op.table, op.column_index_map, op.return_chunk);
+    auto insert = make_uniq<AirportInsert>(
+        op,
+        op.table,
+        op.column_index_map,
+        op.return_chunk,
+        std::move(op.bound_defaults),
+        std::move(op.bound_constraints));
+
     insert->children.push_back(std::move(plan));
     return std::move(insert);
   }

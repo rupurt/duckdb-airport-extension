@@ -50,6 +50,7 @@ namespace duckdb
     duckdb::unique_ptr<LocalTableFunctionState> scan_local_state;
 
     vector<LogicalType> send_types;
+    vector<string> send_names;
   };
 
   void AirportExchangeGetGlobalSinkState(ClientContext &context,
