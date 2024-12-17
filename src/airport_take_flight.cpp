@@ -125,11 +125,12 @@ namespace duckdb
 
   static unique_ptr<FunctionData> take_flight_bind_with_descriptor(
       TakeFlightParameters &take_flight_params,
-      flight::FlightDescriptor &descriptor,
+      const flight::FlightDescriptor &descriptor,
       ClientContext &context,
       TableFunctionBindInput &input,
       vector<LogicalType> &return_types,
-      vector<string> &names)
+      vector<string> &names,
+      std::shared_ptr<flight::FlightInfo>* cached_info_ptr)
   {
 
     // Create a UID for tracing.
@@ -168,16 +169,30 @@ namespace duckdb
 
     // Get the information about the flight, this will allow the
     // endpoint information to be returned.
-    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto flight_info,
-                                                       flight_client->GetFlightInfo(call_options, descriptor),
-                                                       take_flight_params.server_location,
-                                                       descriptor,
-                                                       "");
-
-    // Assert that the descriptor is the same as the one that was passed in.
-    if (descriptor != flight_info->descriptor())
+    unique_ptr<AirportTakeFlightScanData> scan_data;
+    if(cached_info_ptr != nullptr)
     {
-      throw InvalidInputException("airport_take_flight: descriptor returned from server does not match the descriptor that was passed in to GetFlightInfo, check with Flight server implementation.");
+      scan_data = make_uniq<AirportTakeFlightScanData>(
+        take_flight_params.server_location,
+        *cached_info_ptr,
+        nullptr);
+    } else {
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto retrieved_flight_info,
+                                                        flight_client->GetFlightInfo(call_options, descriptor),
+                                                        take_flight_params.server_location,
+                                                        descriptor,
+                                                        "");
+
+      // Assert that the descriptor is the same as the one that was passed in.
+      if (descriptor != retrieved_flight_info->descriptor())
+      {
+        throw InvalidInputException("airport_take_flight: descriptor returned from server does not match the descriptor that was passed in to GetFlightInfo, check with Flight server implementation.");
+      }
+
+      scan_data = make_uniq<AirportTakeFlightScanData>(
+        take_flight_params.server_location,
+        std::move(retrieved_flight_info),
+        nullptr);
     }
 
     // Store the flight info on the bind data.
@@ -192,12 +207,6 @@ namespace duckdb
     // Thankfully there is a "bridge" interface between the C++ based Arrow types returned
     // by the C++ Arrow library and the C based Arrow types that DuckDB already knows how to
     // consume.
-
-    auto scan_data = make_uniq<AirportTakeFlightScanData>(
-        take_flight_params.server_location,
-        std::move(flight_info),
-        nullptr);
-
     auto ret = make_uniq<AirportTakeFlightBindData>(
         (stream_factory_produce_t)&AirportFlightStreamReader::CreateStream,
         (uintptr_t)scan_data.get());
@@ -298,7 +307,7 @@ namespace duckdb
         params,
         descriptor,
         context,
-        input, return_types, names);
+        input, return_types, names, nullptr);
   }
 
   static unique_ptr<FunctionData> take_flight_bind_with_pointer(
@@ -315,15 +324,16 @@ namespace duckdb
       throw BinderException("airport: take_flight_with_pointer, pointers to flight descriptor cannot be null");
     }
 
-    auto descriptor = *reinterpret_cast<flight::FlightDescriptor *>(input.inputs[1].GetPointer());
+    const auto info = reinterpret_cast<std::shared_ptr<flight::FlightInfo>*>(input.inputs[1].GetPointer());
 
     return take_flight_bind_with_descriptor(
         params,
-        descriptor,
+        info->get()->descriptor(),
         context,
         input,
         return_types,
-        names);
+        names,
+        info);
   }
 
   static void take_flight(ClientContext &context, TableFunctionInput &data_p, DataChunk &output)

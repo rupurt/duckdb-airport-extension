@@ -143,7 +143,7 @@ To create a secret that can be used by `airport_take_flight` and `airport_list_f
 ```sql
 CREATE SECRET airport_hello_world (
       type airport,
-      token 'test-token',
+      auth_token 'test-token',
       scope 'grpc+tls://server.example.com/'
 );
 ```

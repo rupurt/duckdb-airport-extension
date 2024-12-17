@@ -12,12 +12,12 @@ namespace duckdb
 
   optional_ptr<CatalogEntry> AirportCatalogSet::GetEntry(ClientContext &context, const string &name)
   {
+    lock_guard<mutex> l(entry_lock);
     if (!is_loaded)
     {
       is_loaded = true;
       LoadEntries(context);
     }
-    lock_guard<mutex> l(entry_lock);
     auto entry = entries.find(name);
     if (entry == entries.end())
     {
@@ -39,12 +39,12 @@ namespace duckdb
 
   void AirportCatalogSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback)
   {
+    lock_guard<mutex> l(entry_lock);
     if (!is_loaded)
     {
       is_loaded = true;
       LoadEntries(context);
     }
-    lock_guard<mutex> l(entry_lock);
     for (auto &entry : entries)
     {
       callback(*entry.second);
@@ -53,7 +53,7 @@ namespace duckdb
 
   optional_ptr<CatalogEntry> AirportCatalogSet::CreateEntry(unique_ptr<CatalogEntry> entry)
   {
-    lock_guard<mutex> l(entry_lock);
+    //    lock_guard<mutex> l(entry_lock);
     auto result = entry.get();
     if (result->name.empty())
     {
@@ -65,6 +65,7 @@ namespace duckdb
 
   void AirportCatalogSet::ClearEntries()
   {
+    lock_guard<mutex> l(entry_lock);
     entries.clear();
     is_loaded = false;
   }

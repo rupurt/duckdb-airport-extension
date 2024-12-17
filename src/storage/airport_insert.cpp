@@ -127,14 +127,14 @@ namespace duckdb
         }
         column_indexes[mapped_index] = column_index;
       }
+    }
 
-      // Since we are supporting default values now, we want to end all columns of the table.
-      // rather than just the columns the user has specified.
-      for (auto &col : entry.GetColumns().Logical())
-      {
-        column_types.push_back(col.GetType());
-        column_names.push_back(col.GetName());
-      }
+    // Since we are supporting default values now, we want to end all columns of the table.
+    // rather than just the columns the user has specified.
+    for (auto &col : entry.GetColumns().Logical())
+    {
+      column_types.push_back(col.GetType());
+      column_names.push_back(col.GetName());
     }
     return make_pair(column_names, column_types);
   }
@@ -161,6 +161,14 @@ namespace duckdb
 
     insert_global_state->send_types = send_types;
     insert_global_state->send_names = send_names;
+
+    // FIXME: so if the user doesn't specify the column list
+    // it means that the send_names/send_types is empty.
+
+    D_ASSERT(send_names.size() == send_types.size());
+    D_ASSERT(send_names.size() > 0);
+    D_ASSERT(send_types.size() > 0);
+
     ArrowSchema send_schema;
     ArrowConverter::ToArrowSchema(&send_schema, insert_global_state->send_types, send_names,
                                   context.GetClientProperties());

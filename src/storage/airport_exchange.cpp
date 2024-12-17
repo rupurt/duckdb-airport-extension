@@ -115,13 +115,6 @@ namespace duckdb
       call_options.headers.emplace_back("airport-flight-path", joined_path_parts);
     }
 
-    // Need to make this call so its possible to be stored in the scan data below.
-    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto flight_info,
-                                                       flight_client->GetFlightInfo(call_options, global_state->flight_descriptor),
-                                                       airport_table.table_data->location,
-                                                       global_state->flight_descriptor,
-                                                       "");
-
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
         auto exchange_result,
         flight_client->DoExchange(call_options, global_state->flight_descriptor),
@@ -143,7 +136,8 @@ namespace duckdb
     // But we can simulate most of that here.
     auto scan_data = make_uniq<AirportTakeFlightScanData>(
         airport_table.table_data->location,
-        std::move(flight_info),
+        airport_table.table_data->flight_info,
+//        std::move(flight_info),
         std::move(exchange_result.reader));
 
     auto scan_bind_data = make_uniq<AirportExchangeTakeFlightBindData>(

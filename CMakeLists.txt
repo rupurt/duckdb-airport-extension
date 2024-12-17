@@ -9,7 +9,7 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 find_package(Arrow REQUIRED)
 find_package(ArrowFlight REQUIRED)
 find_package(CURL REQUIRED)
-
+find_package(msgpack-cxx CONFIG REQUIRED)
 
 project(${TARGET_NAME})
 include_directories(src/include)
@@ -58,6 +58,7 @@ target_link_libraries(${EXTENSION_NAME}
   CURL::libcurl
   OpenSSL::SSL
   OpenSSL::Crypto
+  msgpack-cxx
 )
 
 #target_link_libraries(${LOADABLE_TARGET_NAME} PRIVATE Arrow::arrow_shared ArrowFlight::arrow_flight_shared CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
@@ -68,7 +69,11 @@ target_link_libraries(${LOADABLE_EXTENSION_NAME}
   Arrow::arrow_static
   ArrowFlight::arrow_flight_static
   gRPC::grpc++
-)
+  CURL::libcurl
+  OpenSSL::SSL
+  OpenSSL::Crypto
+  msgpack-cxx
+  )
 
 
 install(

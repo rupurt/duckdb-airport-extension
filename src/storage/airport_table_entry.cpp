@@ -45,11 +45,9 @@ namespace duckdb
     D_ASSERT(table_data);
     D_ASSERT(table_data->flight_info);
 
-    auto descriptor = table_data->flight_info->descriptor();
 
     // Rusty: this is the place where the transformation happens between table functions and tables.
-
-    vector<Value> inputs = {table_data->location, Value::POINTER((uintptr_t)&table_data->flight_info->descriptor())};
+    vector<Value> inputs = {table_data->location, Value::POINTER((uintptr_t)&table_data->flight_info)};
 
     named_parameter_map_t param_map;
     vector<LogicalType> return_types;

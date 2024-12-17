@@ -12,6 +12,7 @@ namespace duckdb
   // Set the connection pool size.
   AirportSchemaSet::AirportSchemaSet(Catalog &catalog) : AirportCatalogSet(catalog), connection_pool(32)
   {
+    catalog_name = catalog.GetName();
   }
 
   static bool IsInternalTable(const string &catalog, const string &schema)
@@ -42,26 +43,14 @@ namespace duckdb
 
   void AirportSchemaSet::LoadEntireSet(ClientContext &context)
   {
+    lock_guard<mutex> l(entry_lock);
+
     if (called_load_entries == false)
     {
       // We haven't called load entries yet.
       LoadEntries(context);
       called_load_entries = true;
     }
-    // If there isn't both a contents_url and contents_sha256 don't do anything.
-    // also if everything has been previously populated, just return early.
-    if (contents_url.empty() || contents_sha256.empty() || populated_entire_set)
-    {
-      return;
-    }
-
-    auto cache_path = DuckDBHomeDirectory(context);
-
-    // Populate the on-disk schema cache from the catalog while contents_url.
-    auto curl = connection_pool.acquire();
-    AirportAPI::PopulateURLCacheUsingContainerURL(curl, contents_url, contents_sha256, cache_path);
-    connection_pool.release(curl);
-    populated_entire_set = true;
   }
 
   void AirportSchemaSet::LoadEntries(ClientContext &context)
@@ -74,18 +63,53 @@ namespace duckdb
     auto &airport_catalog = catalog.Cast<AirportCatalog>();
     string cache_path = DuckDBHomeDirectory(context);
 
-    auto schema_collection = AirportAPI::GetSchemas(catalog.GetName(), airport_catalog.credentials);
+    auto returned_collection = AirportAPI::GetSchemas(catalog.GetName(), airport_catalog.credentials);
 
-    contents_url = schema_collection->contents_url;
-    contents_sha256 = schema_collection->contents_sha256;
+    collection = std::move(returned_collection);
 
-    for (const auto &schema : schema_collection->schemas)
+    std::unordered_set<string> seen_schema_names;
+
+    // So the database can have all of its schemas sent at the top level.
+    //
+    // It can return a URL or an inline serialization of all saved schemas
+    //
+    // When the individual schemas are loaded they will be loaded through the
+    // cached content that is already present on the disk, or if the schema
+    // is serialized inline that will be used.
+    //
+    if (!populated_entire_set && !collection->contents_sha256.empty() &&
+        !(collection->contents_serialized.empty() && collection->schema_collection_contents_url.empty()))
+    {
+      auto cache_path = DuckDBHomeDirectory(context);
+
+      // Populate the on-disk schema cache from the catalog while contents_url.
+      auto curl = connection_pool.acquire();
+      AirportAPI::PopulateCatalogSchemaCacheFromURLorContent(curl, *collection, catalog_name, cache_path);
+      connection_pool.release(curl);
+    }
+    populated_entire_set = true;
+
+    for (const auto &schema : collection->schemas)
     {
       CreateSchemaInfo info;
+
+      if (schema.schema_name.empty())
+      {
+        throw InvalidInputException("Schema name is empty when loading entries");
+      }
+      if (!(seen_schema_names.find(schema.schema_name) == seen_schema_names.end()))
+      {
+        throw InvalidInputException("Schema name %s is not unique when loading entries", schema.schema_name.c_str());
+      }
+
+      seen_schema_names.insert(schema.schema_name);
+
       info.schema = schema.schema_name;
       info.internal = IsInternalTable(schema.catalog_name, schema.schema_name);
       auto schema_entry = make_uniq<AirportSchemaEntry>(catalog, info, connection_pool, cache_path);
       schema_entry->schema_data = make_uniq<AirportAPISchema>(schema);
+
+      // Since these are DuckDB attributes, we need to copy them manually.
       schema_entry->comment = schema.comment;
       schema_entry->tags = schema.tags;
       CreateEntry(std::move(schema_entry));

@@ -40,6 +40,7 @@ namespace duckdb
 
     auto &airport_catalog = catalog.Cast<AirportCatalog>();
 
+    printf("Loading airport Entries for schema %s from the URL\n", schema.name.c_str());
     // TODO: handle out-of-order columns using position property
     auto curl = connection_pool.acquire();
     auto tables = AirportAPI::GetTables(
@@ -48,13 +49,17 @@ namespace duckdb
         schema.name,
         schema.schema_data->contents_url,
         schema.schema_data->contents_sha256,
+        schema.schema_data->contents_serialized,
         cache_directory,
         airport_catalog.credentials);
     connection_pool.release(curl);
 
+    printf("Found a total of %lld tables.\n", tables.size());
+
     for (auto &table : tables)
     {
-      //      D_ASSERT(schema.name == table.schema_name);
+      printf("Got a table in schema %s with table schema name %s\n", schema.name.c_str(), table.schema_name.c_str());
+      // D_ASSERT(schema.name == table.schema_name);
       CreateTableInfo info;
 
       info.table = table.name;
@@ -209,9 +214,11 @@ namespace duckdb
 
           auto default_value = column_metadata.GetOption("default");
 
-          if (!default_value.empty()) {
+          if (!default_value.empty())
+          {
             auto expressions = Parser::ParseExpressionList(default_value);
-            if (expressions.empty()) {
+            if (expressions.empty())
+            {
               throw InternalException("Expression list is empty when parsing default value for column %s", column.name);
             }
             column_def.SetDefaultValue(std::move(expressions[0]));
@@ -227,6 +234,8 @@ namespace duckdb
         auto not_null_index = info.columns.GetColumnIndex(col_name);
         info.constraints.emplace_back(make_uniq<NotNullConstraint>(not_null_index));
       }
+
+      printf("Creating a table in catalog %s, schema %s, name %s\n", catalog.GetName().c_str(), schema.name.c_str(), info.table.c_str());
 
       auto table_entry = make_uniq<AirportTableEntry>(catalog, schema, info, row_id_type);
       table_entry->table_data = make_uniq<AirportAPITable>(table);

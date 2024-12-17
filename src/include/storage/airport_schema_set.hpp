@@ -2,6 +2,7 @@
 
 #include "airport_catalog_set.hpp"
 #include "airport_curl_pool.hpp"
+#include "airport_catalog_api.hpp"
 
 namespace duckdb
 {
@@ -24,11 +25,13 @@ namespace duckdb
 
   private:
     AirportCurlPool connection_pool;
-    string contents_url;
-    string contents_sha256;
+    string catalog_name;
+
+    unique_ptr<AirportSchemaCollection> collection;
+
     bool populated_entire_set = false;
     bool called_load_entries = false;
-
+    mutex entry_lock;
   };
 
 } // namespace duckdb

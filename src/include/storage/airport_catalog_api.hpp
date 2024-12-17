@@ -31,14 +31,19 @@ namespace duckdb
     string contents_url;
     // The SHA256 hash of the contents of the schema.
     string contents_sha256;
+
+    // The actual contents of the schema if provided inline.
+    string contents_serialized;
   };
 
   struct AirportSchemaCollection
   {
     // An optional URL that contains all of the contents for all of the schemas.
-    string contents_url;
+    string schema_collection_contents_url;
     // The SHA256 of the contents url.
     string contents_sha256;
+    string contents_serialized;
+
     vector<AirportAPISchema> schemas;
   };
 
@@ -51,10 +56,15 @@ namespace duckdb
                                              const string &schema,
                                              const string &schema_contents_url,
                                              const string &schema_contents_sha256,
+                                             const string &schema_contents_serialized,
                                              const string &cache_base_dir,
                                              AirportCredentials credentials);
     static unique_ptr<AirportSchemaCollection> GetSchemas(const string &catalog, AirportCredentials credentials);
 
-    static void PopulateURLCacheUsingContainerURL(CURL *curl, const string &url, const string &expected_sha256, const string &baseDir);
+    static void PopulateCatalogSchemaCacheFromURLorContent(CURL *curl,
+                                       const AirportSchemaCollection &collection,
+                                       const string &catalog_name,
+                                       const string &baseDir);
+
   };
 } // namespace duckdb
