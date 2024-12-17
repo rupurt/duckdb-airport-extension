@@ -38,6 +38,10 @@ namespace duckdb
 
     unique_ptr<AirportAPITable> table_data;
 
+    LogicalType GetRowIdType() const override {
+      return rowid_type;
+    }
+
   public:
     unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
 
@@ -47,6 +51,10 @@ namespace duckdb
 
     // void BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj, LogicalUpdate &update,
     //                            ClientContext &context) override;
+  private:
+  	//! A logical type for the rowid of this table.
+	  LogicalType rowid_type = LogicalType(LogicalType::ROW_TYPE);
+
   };
 
 } // namespace duckdb

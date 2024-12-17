@@ -368,7 +368,6 @@ namespace duckdb
     // use it otherwise fall abck to the url
     if(!serialized.empty()) {
       if(SHA256ForString(serialized) == expected_sha256) {
-        printf("Using inline serialized data for schema contents\n");
         return std::make_pair(200, serialized);
       }
       if(url.empty()) {
@@ -392,7 +391,6 @@ namespace duckdb
         {
           throw IOException("SHA256 mismatch for URL: %s from cached data at %s, check for cache corruption", url, paths.second.c_str());
         }
-        printf("Returning cached content\n");
         return std::make_pair(200, cachedData);
       }
     }
@@ -414,9 +412,6 @@ namespace duckdb
 
     // Rename the temporary file to the final filename
     fs->MoveFile(tempFilename, paths.second);
-
-    printf("Disk cache miss for %s\n", url.c_str());
-
     return get_result;
   }
 
@@ -505,7 +500,6 @@ namespace duckdb
         {
           ParseFlightAppMetadata(table, catalog, schema);
         }
-        printf("Parsed catalog name '%s' and schema name '%s'\n", table.catalog_name.c_str(), table.schema_name.c_str());
         if (table.catalog_name == catalog && table.schema_name == schema)
         {
           result.emplace_back(table);
@@ -521,7 +515,6 @@ namespace duckdb
     }
     else
     {
-      printf("Loading the contents by listing via ListFlights\n");
       // We need to load the contents of the schemas by listing the flights.
       arrow::flight::FlightCallOptions call_options;
       airport_add_standard_headers(call_options, credentials.location);
@@ -643,7 +636,6 @@ namespace duckdb
 
     arrow::flight::Action action{"list_schemas", arrow::Buffer::FromString(create_schema_request_document(catalog))};
     std::unique_ptr<arrow::flight::ResultStream> action_results;
-    printf("Calling list schemas with %s\n", create_schema_request_document(catalog).c_str());
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(action_results, flight_client->DoAction(call_options, action), credentials.location, "");
 
     // the first item is the decompressed length

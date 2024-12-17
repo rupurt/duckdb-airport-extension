@@ -18,13 +18,13 @@ namespace duckdb
 {
 
   AirportTableEntry::AirportTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info, LogicalType rowid_type)
-      : TableCatalogEntry(catalog, schema, info, rowid_type)
+      : TableCatalogEntry(catalog, schema, info), rowid_type(rowid_type)
   {
     this->internal = false;
   }
 
   AirportTableEntry::AirportTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, AirportTableInfo &info, LogicalType rowid_type)
-      : TableCatalogEntry(catalog, schema, *info.create_info, rowid_type)
+      : TableCatalogEntry(catalog, schema, *info.create_info), rowid_type(rowid_type)
   {
     this->internal = false;
   }
