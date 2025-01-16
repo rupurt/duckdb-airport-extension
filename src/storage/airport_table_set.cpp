@@ -10,6 +10,10 @@
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/catalog/dependency_list.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_function_info.hpp"
+#include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/parser/constraints/list.hpp"
 #include "storage/airport_schema_entry.hpp"
 #include "duckdb/parser/parser.hpp"
@@ -19,18 +23,48 @@
 #include "duckdb/function/table/arrow.hpp"
 #include "duckdb/common/arrow/schema_metadata.hpp"
 #include "storage/airport_curl_pool.hpp"
+#include "airport_macros.hpp"
+#include "airport_secrets.hpp"
+#include "airport_headers.hpp"
+#include "airport_scalar_function.hpp"
 #include "yyjson.hpp"
 
 using namespace duckdb_yyjson; // NOLINT
 
+struct FunctionCatalogSchemaName
+{
+  std::string catalog_name;
+  std::string schema_name;
+  std::string name;
+
+  // Define equality operator to compare two keys
+  bool operator==(const FunctionCatalogSchemaName &other) const
+  {
+    return catalog_name == other.catalog_name && schema_name == other.schema_name && name == other.name;
+  }
+};
+
+namespace std
+{
+  template <>
+  struct hash<FunctionCatalogSchemaName>
+  {
+    size_t operator()(const FunctionCatalogSchemaName &k) const
+    {
+      // Combine the hash of all 3 strings
+      return hash<std::string>()(k.catalog_name) ^ (hash<std::string>()(k.schema_name) << 1) ^ (hash<std::string>()(k.name) << 2);
+    }
+  };
+}
+
 namespace duckdb
 {
 
-  AirportTableSet::AirportTableSet(AirportCurlPool &connection_pool, AirportSchemaEntry &schema, const string &cache_directory_) : AirportInSchemaSet(schema), connection_pool(connection_pool), cache_directory(cache_directory_)
+  AirportFunctionSet::AirportFunctionSet(AirportCurlPool &connection_pool, AirportSchemaEntry &schema, const string &cache_directory_) : AirportInSchemaSet(schema), connection_pool(connection_pool), cache_directory(cache_directory_)
   {
   }
 
-  AirportTableSet::~AirportTableSet()
+  AirportTableSet::AirportTableSet(AirportCurlPool &connection_pool, AirportSchemaEntry &schema, const string &cache_directory_) : AirportInSchemaSet(schema), connection_pool(connection_pool), cache_directory(cache_directory_)
   {
   }
 
@@ -42,7 +76,7 @@ namespace duckdb
 
     // TODO: handle out-of-order columns using position property
     auto curl = connection_pool.acquire();
-    auto tables = AirportAPI::GetTables(
+    auto tables_and_functions = AirportAPI::GetSchemaItems(
         curl,
         catalog.GetDBPath(),
         schema.name,
@@ -53,7 +87,10 @@ namespace duckdb
         airport_catalog.credentials);
     connection_pool.release(curl);
 
-    for (auto &table : tables)
+    //    printf("AirportTableSet loading entries\n");
+    //    printf("Total tables: %lu\n", tables_and_functions.first.size());
+
+    for (auto &table : tables_and_functions.first)
     {
       // D_ASSERT(schema.name == table.schema_name);
       CreateTableInfo info;
@@ -146,7 +183,7 @@ namespace duckdb
           auto is_row_id = column_metadata.GetOption("is_row_id");
           if (!is_row_id.empty())
           {
-            row_id_type = ArrowTableFunction::GetArrowLogicalType(column)->GetDuckType();
+            row_id_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), column)->GetDuckType();
 
             // So the skipping here is a problem, since its assumed
             // that the return_type and column_names can be easily indexed.
@@ -162,10 +199,10 @@ namespace duckdb
 
         column_names.emplace_back(column_name);
 
-        auto arrow_type = ArrowTableFunction::GetArrowLogicalType(column);
+        auto arrow_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), column);
         if (column.dictionary)
         {
-          auto dictionary_type = ArrowTableFunction::GetArrowLogicalType(*column.dictionary);
+          auto dictionary_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), *column.dictionary);
           return_types.emplace_back(dictionary_type->GetDuckType());
         }
         else
@@ -231,7 +268,7 @@ namespace duckdb
         info.constraints.emplace_back(make_uniq<NotNullConstraint>(not_null_index));
       }
 
-      //printf("Creating a table in catalog %s, schema %s, name %s\n", catalog.GetName().c_str(), schema.name.c_str(), info.table.c_str());
+      // printf("Creating a table in catalog %s, schema %s, name %s\n", catalog.GetName().c_str(), schema.name.c_str(), info.table.c_str());
 
       auto table_entry = make_uniq<AirportTableEntry>(catalog, schema, info, row_id_type);
       table_entry->table_data = make_uniq<AirportAPITable>(table);
@@ -283,6 +320,134 @@ namespace duckdb
   void AirportTableSet::AlterTable(ClientContext &context, AlterTableInfo &alter)
   {
     throw NotImplementedException("AirportTableSet::AlterTable");
+  }
+
+  // Given an Arrow schema return a vector of the LogicalTypes for that schema.
+  static vector<LogicalType> AirportSchemaToLogicalTypes(
+      ClientContext &context,
+      std::shared_ptr<arrow::Schema> schema,
+      const string &server_location,
+      const flight::FlightDescriptor &flight_descriptor)
+  {
+    ArrowSchemaWrapper schema_root;
+
+    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(
+        ExportSchema(*schema, &schema_root.arrow_schema),
+        server_location,
+        flight_descriptor,
+        "ExportSchema");
+
+    vector<LogicalType> return_types;
+
+    for (idx_t col_idx = 0;
+         col_idx < (idx_t)schema_root.arrow_schema.n_children; col_idx++)
+    {
+      auto &schema = *schema_root.arrow_schema.children[col_idx];
+      if (!schema.release)
+      {
+        throw InvalidInputException("AirportSchemaToLogicalTypes: released schema passed");
+      }
+      auto arrow_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), schema);
+
+      if (schema.dictionary)
+      {
+        auto dictionary_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), *schema.dictionary);
+        arrow_type->SetDictionary(std::move(dictionary_type));
+      }
+      else
+      {
+        return_types.emplace_back(arrow_type->GetDuckType());
+      }
+    }
+    return return_types;
+  }
+
+  void AirportFunctionSet::LoadEntries(ClientContext &context)
+  {
+    // auto &transaction = AirportTransaction::Get(context, catalog);
+
+    auto &airport_catalog = catalog.Cast<AirportCatalog>();
+
+    // TODO: handle out-of-order columns using position property
+    auto curl = connection_pool.acquire();
+    auto tables_and_functions = AirportAPI::GetSchemaItems(
+        curl,
+        catalog.GetDBPath(),
+        schema.name,
+        schema.schema_data->contents_url,
+        schema.schema_data->contents_sha256,
+        schema.schema_data->contents_serialized,
+        cache_directory,
+        airport_catalog.credentials);
+
+    connection_pool.release(curl);
+
+    //    printf("AirportFunctionSet loading entries\n");
+    //    printf("Total functions: %lu\n", tables_and_functions.second.size());
+
+    // There can be functions with the same name.
+    std::unordered_map<FunctionCatalogSchemaName, std::vector<AirportAPIScalarFunction>> scalar_functions_by_name;
+
+    for (auto &function : tables_and_functions.second)
+    {
+      FunctionCatalogSchemaName function_key{function.catalog_name, function.schema_name, function.name};
+      scalar_functions_by_name[function_key].emplace_back(function);
+    }
+
+    for (const auto &pair : scalar_functions_by_name)
+    {
+      ScalarFunctionSet flight_func_set(pair.first.name);
+
+      // FIXME: need a way to specify the function stability.
+      for (const auto &function : pair.second)
+      {
+        auto input_types = AirportSchemaToLogicalTypes(context, function.input_schema, function.location, function.flight_info->descriptor());
+
+        arrow::ipc::DictionaryMemo dictionary_memo;
+
+        AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
+            auto output_schema,
+            function.flight_info->GetSchema(&dictionary_memo),
+            function.location,
+            function.flight_info->descriptor(),
+            "GetSchema");
+
+        auto output_types = AirportSchemaToLogicalTypes(context, output_schema, function.location, function.flight_info->descriptor());
+        D_ASSERT(output_types.size() == 1);
+
+        // FIXME: deal with encoding the input and output types of the function.
+        auto foo = ScalarFunction(input_types, output_types[0],
+                                  AirportScalarFun,
+                                  nullptr,
+                                  nullptr,
+                                  nullptr,
+                                  AirportScalarFunInitLocalState,
+                                  LogicalTypeId::INVALID,
+                                  duckdb::FunctionStability::VOLATILE,
+                                  duckdb::FunctionNullHandling::DEFAULT_NULL_HANDLING,
+                                  nullptr);
+        // TODO: we need a bind function to create a flight client, and start the DoExchange call
+        // then stream the data across and read the results, but that will all be thread local.
+        // since it is assumed.
+        foo.function_info = make_uniq<AirportScalarFunctionInfo>(function.location, function.name, function.flight_info,
+                                                                 function.input_schema);
+
+        flight_func_set.AddFunction(foo);
+      }
+
+      CreateScalarFunctionInfo info = CreateScalarFunctionInfo(flight_func_set);
+      info.catalog = pair.first.catalog_name;
+      info.schema = pair.first.schema_name;
+
+      auto function_entry = make_uniq_base<StandardEntry, ScalarFunctionCatalogEntry>(catalog, schema,
+                                                                                      info.Cast<CreateScalarFunctionInfo>());
+      // printf("Adding function named %s\n", pair.first.name.c_str());
+
+      // Okay since we're getting called in LoadEntries in an AirportTableSet, this is putting this catalog
+      // entry in the list of tables rather that functions, which is causing a problem with the scanning
+      // of items.
+      CreateEntry(std::move(function_entry));
+    }
   }
 
 } // namespace duckdb

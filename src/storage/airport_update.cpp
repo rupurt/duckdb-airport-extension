@@ -143,10 +143,12 @@ namespace duckdb
     update_global_state->send_types = send_types;
 
     ArrowSchema send_schema;
+    auto client_properties = context.GetClientProperties();
+
     ArrowConverter::ToArrowSchema(&send_schema,
                                   update_global_state->send_types,
                                   send_names,
-                                  context.GetClientProperties());
+                                  client_properties);
 
     // Get the names of the columns that exist on the table with the addition of
     // row_id which will always be the last column.
@@ -223,7 +225,9 @@ namespace duckdb
     // Acquire a lock because we don't want other threads to be writing to the same streams
     // at the same time.
 
-    auto appender = make_uniq<ArrowAppender>(gstate.send_types, send_update_chunk.size(), context.client.GetClientProperties());
+    auto appender = make_uniq<ArrowAppender>(gstate.send_types, send_update_chunk.size(), context.client.GetClientProperties(),
+                                             ArrowTypeExtensionData::GetExtensionTypes(
+                                                 context.client, gstate.send_types));
     appender->Append(send_update_chunk, 0, send_update_chunk.size(), send_update_chunk.size());
     ArrowArray arr = appender->Finalize();
 

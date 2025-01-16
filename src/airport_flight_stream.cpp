@@ -172,16 +172,16 @@ namespace duckdb
         FlightMakeRecordBatchReader(
             buffer_data->stream_,
             buffer_data->flight_server_location_,
-            buffer_data->flight_info_->descriptor(),
+            buffer_data->flight_descriptor(),
             &buffer_data->progress_,
             &buffer_data->last_app_metadata_),
         buffer_data->flight_server_location_,
-        buffer_data->flight_info_->descriptor(),
+        buffer_data->flight_descriptor(),
         "");
 
     // Create arrow stream
     //    auto stream_wrapper = duckdb::make_uniq<duckdb::ArrowArrayStreamWrapper>();
-    auto stream_wrapper = duckdb::make_uniq<AirportArrowArrayStreamWrapper>(buffer_data->flight_server_location_, buffer_data->flight_info_->descriptor());
+    auto stream_wrapper = duckdb::make_uniq<AirportArrowArrayStreamWrapper>(buffer_data->flight_server_location_, buffer_data->flight_descriptor());
     stream_wrapper->arrow_array_stream.release = nullptr;
 
     auto maybe_ok = arrow::ExportRecordBatchReader(
@@ -212,9 +212,13 @@ namespace duckdb
     arrow::ipc::DictionaryMemo dictionary_memo;
     const auto actual_reader = reader->get();
 
-    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(info_schema, actual_reader->flight_info_->GetSchema(&dictionary_memo), actual_reader->flight_server_location_, actual_reader->flight_info_->descriptor(), "");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(info_schema,
+                                                       actual_reader->flight_info_->GetSchema(&dictionary_memo),
+                                                       actual_reader->flight_server_location_,
+                                                       actual_reader->flight_descriptor(),
+                                                       "");
 
-    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(ExportSchema(*info_schema, &schema.arrow_schema), actual_reader->flight_server_location_, actual_reader->flight_info_->descriptor(), "ExportSchema");
+    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(ExportSchema(*info_schema, &schema.arrow_schema), actual_reader->flight_server_location_, actual_reader->flight_descriptor(), "ExportSchema");
   }
 
   shared_ptr<ArrowArrayWrapper> AirportArrowArrayStreamWrapper::GetNextChunk()

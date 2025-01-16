@@ -18,7 +18,7 @@ namespace duckdb
 
   public:
     explicit AirportTableSet(AirportCurlPool &connection_pool, AirportSchemaEntry &schema, const string &cache_directory);
-    ~AirportTableSet();
+    ~AirportTableSet() {}
 
   public:
     optional_ptr<CatalogEntry> CreateTable(ClientContext &context, BoundCreateTableInfo &info);
@@ -38,6 +38,21 @@ namespace duckdb
     void AlterTable(ClientContext &context, RemoveColumnInfo &info);
 
     static void AddColumn(ClientContext &context, AirportResult &result, AirportTableInfo &table_info, idx_t column_offset = 0);
+  };
+
+  class AirportFunctionSet : public AirportInSchemaSet
+  {
+
+  protected:
+    void LoadEntries(ClientContext &context) override;
+
+  private:
+    AirportCurlPool &connection_pool;
+    string cache_directory;
+
+  public:
+    explicit AirportFunctionSet(AirportCurlPool &connection_pool, AirportSchemaEntry &schema, const string &cache_directory);
+    ~AirportFunctionSet() {}
   };
 
 } // namespace duckdb

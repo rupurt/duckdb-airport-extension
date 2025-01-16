@@ -4,6 +4,7 @@
 #include "duckdb/function/table/arrow.hpp"
 #include "airport_flight_stream.hpp"
 #include "airport_take_flight.hpp"
+#include "airport_table_entry.hpp"
 
 namespace duckdb
 {

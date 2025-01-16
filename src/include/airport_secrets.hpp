@@ -7,6 +7,6 @@ namespace duckdb
 
   SecretMatch AirportGetSecretByPath(ClientContext &context, const string &path);
 
-  string AirportAuthTokenForLocation(ClientContext &context, string &server_location, const string &secret_name, const string &auth_token);
+  string AirportAuthTokenForLocation(ClientContext &context, const string &server_location, const string &secret_name, const string &auth_token);
 
 }

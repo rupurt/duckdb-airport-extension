@@ -19,6 +19,7 @@
 #include "airport_headers.hpp"
 #include "airport_exception.hpp"
 #include "duckdb/common/arrow/schema_metadata.hpp"
+#include "duckdb/function/table/arrow/arrow_duck_schema.hpp"
 
 namespace duckdb
 {
@@ -130,7 +131,7 @@ namespace duckdb
       TableFunctionBindInput &input,
       vector<LogicalType> &return_types,
       vector<string> &names,
-      std::shared_ptr<flight::FlightInfo>* cached_info_ptr)
+      std::shared_ptr<flight::FlightInfo> *cached_info_ptr)
   {
 
     // Create a UID for tracing.
@@ -170,18 +171,20 @@ namespace duckdb
     // Get the information about the flight, this will allow the
     // endpoint information to be returned.
     unique_ptr<AirportTakeFlightScanData> scan_data;
-    if(cached_info_ptr != nullptr)
+    if (cached_info_ptr != nullptr)
     {
       scan_data = make_uniq<AirportTakeFlightScanData>(
-        take_flight_params.server_location,
-        *cached_info_ptr,
-        nullptr);
-    } else {
+          take_flight_params.server_location,
+          *cached_info_ptr,
+          nullptr);
+    }
+    else
+    {
       AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto retrieved_flight_info,
-                                                        flight_client->GetFlightInfo(call_options, descriptor),
-                                                        take_flight_params.server_location,
-                                                        descriptor,
-                                                        "");
+                                                         flight_client->GetFlightInfo(call_options, descriptor),
+                                                         take_flight_params.server_location,
+                                                         descriptor,
+                                                         "");
 
       // Assert that the descriptor is the same as the one that was passed in.
       if (descriptor != retrieved_flight_info->descriptor())
@@ -190,9 +193,9 @@ namespace duckdb
       }
 
       scan_data = make_uniq<AirportTakeFlightScanData>(
-        take_flight_params.server_location,
-        std::move(retrieved_flight_info),
-        nullptr);
+          take_flight_params.server_location,
+          std::move(retrieved_flight_info),
+          nullptr);
     }
 
     // Store the flight info on the bind data.
@@ -239,7 +242,7 @@ namespace duckdb
       {
         throw InvalidInputException("airport_take_flight: released schema passed");
       }
-      auto arrow_type = ArrowTableFunction::GetArrowLogicalType(schema);
+      auto arrow_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), schema);
 
       // Determine if the column is the row_id column by looking at the metadata
       // on the column.
@@ -258,7 +261,7 @@ namespace duckdb
 
       if (schema.dictionary)
       {
-        auto dictionary_type = ArrowTableFunction::GetArrowLogicalType(*schema.dictionary);
+        auto dictionary_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), *schema.dictionary);
         if (!is_row_id_column)
         {
           return_types.emplace_back(dictionary_type->GetDuckType());
@@ -324,7 +327,7 @@ namespace duckdb
       throw BinderException("airport: take_flight_with_pointer, pointers to flight descriptor cannot be null");
     }
 
-    const auto info = reinterpret_cast<std::shared_ptr<flight::FlightInfo>*>(input.inputs[1].GetPointer());
+    const auto info = reinterpret_cast<std::shared_ptr<flight::FlightInfo> *>(input.inputs[1].GetPointer());
 
     return take_flight_bind_with_descriptor(
         params,
@@ -391,7 +394,7 @@ namespace duckdb
     // This estimate does not take into account any filters that may have been applied
     //
     auto &bind_data = data->Cast<AirportTakeFlightBindData>();
-    auto flight_estimated_records = bind_data.scan_data.get()->flight_info_->total_records();
+    auto flight_estimated_records = bind_data.scan_data.get()->total_records();
 
     if (flight_estimated_records != -1)
     {
@@ -536,7 +539,7 @@ namespace duckdb
 
     // Since the ticket is an opaque reference to the stream, its useful to the middle ware
     // sometimes to know what the path of the flight is.
-    auto descriptor = bind_data.scan_data->flight_info_->descriptor();
+    auto descriptor = bind_data.scan_data->flight_descriptor();
     if (descriptor.type == arrow::flight::FlightDescriptor::PATH)
     {
       auto path_parts = descriptor.path;
@@ -581,7 +584,7 @@ namespace duckdb
       auto joined_column_ids = join_vector_of_strings(convert_to_strings(input.column_ids), ',');
 
       auto dynamic_ticket = BuildDynamicTicketData(bind_data.json_filters, joined_column_ids, &uncompressed_length, bind_data.server_location,
-                                                   bind_data.scan_data->flight_info_->descriptor());
+                                                   bind_data.scan_data->flight_descriptor());
 
       auto compressed_length_bytes = std::string((char *)&uncompressed_length, sizeof(uncompressed_length));
 
@@ -596,7 +599,7 @@ namespace duckdb
             call_options,
             server_ticket),
         bind_data.server_location,
-        bind_data.scan_data->flight_info_->descriptor(),
+        bind_data.scan_data->flight_descriptor(),
         "");
 
     //    bind_data.scan_data->stream_ = std::move(flight_stream);

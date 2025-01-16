@@ -10,6 +10,12 @@
   for (::arrow::Status _st = ::arrow::internal::GenericToStatus((expr)); !_st.ok();)     \
     throw AirportFlightException(location, descriptor, _st, message);
 
+#define AIRPORT_ASSERT_OK_LOCATION_DESCRIPTOR(expr, location, descriptor, message) \
+  if (!expr)                                                                       \
+  {                                                                                \
+    throw AirportFlightException(location, descriptor, #expr, message);            \
+  }
+
 #define AIRPORT_FLIGHT_RETURN_IF_LOCATION_DESCRIPTOR(error_prefix, condition, status, location, descriptor, message, extra_message) \
   do                                                                                                                                \
   {                                                                                                                                 \

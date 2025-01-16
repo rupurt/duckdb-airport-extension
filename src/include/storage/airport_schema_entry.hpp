@@ -42,6 +42,7 @@ namespace duckdb
 
   private:
     AirportTableSet tables;
+    AirportFunctionSet functions;
   };
 
 } // namespace duckdb

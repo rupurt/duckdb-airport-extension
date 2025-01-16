@@ -137,7 +137,7 @@ namespace duckdb
     auto scan_data = make_uniq<AirportTakeFlightScanData>(
         airport_table.table_data->location,
         airport_table.table_data->flight_info,
-//        std::move(flight_info),
+        //        std::move(flight_info),
         std::move(exchange_result.reader));
 
     auto scan_bind_data = make_uniq<AirportExchangeTakeFlightBindData>(
@@ -197,7 +197,7 @@ namespace duckdb
         {
           throw InvalidInputException("airport_exchange: released schema passed");
         }
-        auto arrow_type = ArrowTableFunction::GetArrowLogicalType(schema);
+        auto arrow_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), schema);
         arrow_types.push_back(arrow_type->GetDuckType().ToString());
       }
 
@@ -229,7 +229,7 @@ namespace duckdb
         {
           throw InvalidInputException("airport_exchange: released schema passed");
         }
-        auto arrow_type = ArrowTableFunction::GetArrowLogicalType(schema);
+        auto arrow_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), schema);
 
         // Determine if the column is the row_id column by looking at the metadata
         // on the column.
@@ -248,7 +248,7 @@ namespace duckdb
 
         if (schema.dictionary)
         {
-          auto dictionary_type = ArrowTableFunction::GetArrowLogicalType(*schema.dictionary);
+          auto dictionary_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), *schema.dictionary);
           if (!is_row_id_column)
           {
             scan_bind_data->return_types.emplace_back(dictionary_type->GetDuckType());
@@ -313,7 +313,7 @@ namespace duckdb
     // Local init.
 
     auto current_chunk = make_uniq<ArrowArrayWrapper>();
-    auto scan_local_state = make_uniq<ArrowScanLocalState>(std::move(current_chunk));
+    auto scan_local_state = make_uniq<ArrowScanLocalState>(std::move(current_chunk), context);
     scan_local_state->column_ids = fake_init_input.column_ids;
     scan_local_state->filters = fake_init_input.filters.get();
 

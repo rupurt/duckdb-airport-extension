@@ -22,6 +22,8 @@
 #include "airport_extension.hpp"
 #include <curl/curl.h>
 #include <msgpack.hpp>
+#include <arrow/ipc/api.h>
+#include <arrow/io/memory.h>
 
 namespace flight = arrow::flight;
 using namespace duckdb_yyjson; // NOLINT
@@ -86,20 +88,6 @@ namespace duckdb
     string read_buffer = string(file_size, '\0');
     handle->Read((void *)read_buffer.data(), file_size);
     return read_buffer;
-  }
-
-  static string TryGetStrFromObject(yyjson_val *obj, const string &field, bool optional = false)
-  {
-    auto val = yyjson_obj_getn(obj, field.c_str(), field.size());
-    if (!val || yyjson_get_type(val) != YYJSON_TYPE_STR)
-    {
-      if (optional)
-      {
-        return "";
-      }
-      throw IOException("JSON parsing error when trying to get field: " + field + " as a string from " + yyjson_val_write(obj, 0, NULL));
-    }
-    return yyjson_get_str(val);
   }
 
   vector<string> AirportAPI::GetCatalogs(const string &catalog, AirportCredentials credentials)
@@ -245,13 +233,14 @@ namespace duckdb
 
   void
   AirportAPI::PopulateCatalogSchemaCacheFromURLorContent(CURL *curl,
-                                     const AirportSchemaCollection &collection,
-                                     const string &catalog_name,
-                                     const string &baseDir)
+                                                         const AirportSchemaCollection &collection,
+                                                         const string &catalog_name,
+                                                         const string &baseDir)
   {
     auto fs = FileSystem::CreateLocal();
 
-    if(collection.contents_sha256.empty()) {
+    if (collection.contents_sha256.empty())
+    {
       // If the collection doesn't have a SHA256 there isn't anything we can do.
       return;
     }
@@ -285,7 +274,8 @@ namespace duckdb
     if (!collection.contents_serialized.empty())
     {
       const string found_sha = SHA256ForString(collection.contents_serialized);
-      if (found_sha != collection.contents_sha256) {
+      if (found_sha != collection.contents_sha256)
+      {
         // Can't use the serrialized data since the SHA256 doesn't match, so
         // just give up.
         //
@@ -293,7 +283,9 @@ namespace duckdb
         return;
       }
       oh = msgpack::unpack((const char *)collection.contents_serialized.data(), collection.contents_serialized.size(), 0);
-    } else {
+    }
+    else
+    {
       // How do we know if the URLs haven't already been populated.
       auto get_result = GetRequest(curl, collection.schema_collection_contents_url, collection.contents_sha256);
 
@@ -310,7 +302,8 @@ namespace duckdb
 
     for (auto &item : unpacked_data)
     {
-      if(item.size() != 2) {
+      if (item.size() != 2)
+      {
         throw IOException("Catalog schema cache contents had an item where size != 2");
       }
 
@@ -333,6 +326,7 @@ namespace duckdb
 
       auto paths = GetCachePath(*fs, item[0], baseDir);
       auto tempFilename = generateTempFilename(*fs, paths.first);
+
       writeToTempFile(*fs, tempFilename, item[1]);
 
       // Rename the temporary file to the final filename
@@ -357,20 +351,26 @@ namespace duckdb
       //
       // So if there was inline content supplied use that and fake that it was
       // retrieved from a server.
-      if (!serialized.empty()) {
+      if (!serialized.empty())
+      {
         return std::make_pair(200, serialized);
-      } else {
+      }
+      else
+      {
         return GetRequest(curl, url, expected_sha256);
       }
     }
 
     // If the user supplied an inline serialized value, check if the sha256 matches, if so
     // use it otherwise fall abck to the url
-    if(!serialized.empty()) {
-      if(SHA256ForString(serialized) == expected_sha256) {
+    if (!serialized.empty())
+    {
+      if (SHA256ForString(serialized) == expected_sha256)
+      {
         return std::make_pair(200, serialized);
       }
-      if(url.empty()) {
+      if (url.empty())
+      {
         throw IOException("SHA256 mismatch inline serialized data and URL is empty");
       }
     }
@@ -415,44 +415,123 @@ namespace duckdb
     return get_result;
   }
 
-  static void ParseFlightAppMetadata(AirportAPITable &table, const string &catalog, const string &schema)
+  struct SerializedFlightAppMetadata
   {
-    auto app_metadata = table.flight_info->app_metadata();
+    // This will either be a "table" or "function"
+    //
+    // table is a sql table
+    // function is a scalar function.
+    string type;
+    string schema;
+    string catalog;
+    string name;
+    string comment;
 
-    if (!app_metadata.empty())
+    // This is the Arrow serialized schema for the input to the function, its not set
+    // on tables.
+    std::optional<string> input_schema;
+
+    MSGPACK_DEFINE_MAP(type, schema, catalog, name, comment, input_schema);
+  };
+
+  static std::unique_ptr<SerializedFlightAppMetadata> ParseFlightAppMetadata(const string &app_metadata)
+  {
+    SerializedFlightAppMetadata app_metadata_obj;
+    try
     {
-      auto doc = yyjson_read(app_metadata.c_str(), app_metadata.size(), 0);
-      if (doc)
+      msgpack::object_handle oh = msgpack::unpack((const char *)app_metadata.data(), app_metadata.size(), 0);
+      msgpack::object obj = oh.get();
+      obj.convert(app_metadata_obj);
+    }
+    catch (const std::exception &e)
+    {
+      throw InvalidInputException("File to parse MsgPack object describing in Arrow Flight app_metadata %s", e.what());
+    }
+    return std::make_unique<SerializedFlightAppMetadata>(app_metadata_obj);
+  }
+
+  void handle_flight_app_metadata(const string &app_metadata,
+                                  const string &target_catalog,
+                                  const string &target_schema,
+                                  const string &location,
+                                  const std::shared_ptr<arrow::flight::FlightInfo> &flight_info,
+                                  vector<AirportAPITable> &found_tables,
+                                  vector<AirportAPIScalarFunction> &found_functions)
+  {
+    auto parsed_app_metadata = ParseFlightAppMetadata(app_metadata);
+    if (!(parsed_app_metadata->catalog == target_catalog && parsed_app_metadata->schema == target_schema))
+    {
+      return;
+    }
+
+    if (parsed_app_metadata->type == "table")
+    {
+      AirportAPITable table{
+          .location = location,
+          .flight_info = std::move(flight_info)};
+
+      table.catalog_name = parsed_app_metadata->catalog;
+      table.schema_name = parsed_app_metadata->schema;
+      table.name = parsed_app_metadata->name;
+      table.comment = parsed_app_metadata->comment;
+
+      found_tables.emplace_back(table);
+    }
+    else if (parsed_app_metadata->type == "scalar_function")
+    {
+      AirportAPIScalarFunction function{
+          .location = location,
+          .flight_info = std::move(flight_info)};
+
+      function.catalog_name = parsed_app_metadata->catalog;
+      function.schema_name = parsed_app_metadata->schema;
+      function.name = parsed_app_metadata->name;
+      function.comment = parsed_app_metadata->comment;
+
+      if (!parsed_app_metadata->input_schema.has_value())
       {
-        auto root = yyjson_doc_get_root(doc);
-        if (root && yyjson_get_type(root) == YYJSON_TYPE_OBJ)
-        {
-          auto object_type = TryGetStrFromObject(root, "type");
-          if (object_type == "table")
-          {
-            table.schema_name = TryGetStrFromObject(root, "schema");
-            table.catalog_name = TryGetStrFromObject(root, "catalog");
-            table.name = TryGetStrFromObject(root, "name");
-            table.comment = TryGetStrFromObject(root, "comment");
-          }
-        }
-        yyjson_doc_free(doc);
+        throw IOException("Function metadata does not have an input_schema defined for function " + function.schema_name + "." + function.name);
       }
+      else
+      {
+        auto serialized_schema = parsed_app_metadata->input_schema.value();
+
+        arrow::io::BufferReader parameter_schema_reader(
+            std::make_shared<arrow::Buffer>(serialized_schema));
+
+        arrow::ipc::DictionaryMemo in_memo;
+        AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
+            auto parameter_schema,
+            arrow::ipc::ReadSchema(&parameter_schema_reader, &in_memo),
+            location,
+            function.flight_info->descriptor(),
+            "Read serialized input schema");
+
+        function.input_schema = parameter_schema;
+      }
+
+      found_functions.emplace_back(function);
+    }
+    else
+    {
+      throw IOException("Unknown object type in app_metadata: " + parsed_app_metadata->type);
     }
   }
 
-  vector<AirportAPITable> AirportAPI::GetTables(CURL *curl,
-                                                const string &catalog,
-                                                const string &schema,
-                                                const string &schema_contents_url,
-                                                const string &schema_contents_sha256,
-                                                const string &schema_contents_serialized,
-                                                const string &cache_base_dir,
-                                                AirportCredentials credentials)
+  std::pair<vector<AirportAPITable>, vector<AirportAPIScalarFunction>>
+  AirportAPI::GetSchemaItems(CURL *curl,
+                             const string &catalog,
+                             const string &schema,
+                             const string &schema_contents_url,
+                             const string &schema_contents_sha256,
+                             const string &schema_contents_serialized,
+                             const string &cache_base_dir,
+                             AirportCredentials credentials)
   {
-    vector<AirportAPITable> result;
+    vector<AirportAPITable> found_tables;
+    vector<AirportAPIScalarFunction> found_functions;
 
-    if (!(schema_contents_url.empty() && schema_contents_serialized.empty()))
+    if (!(schema_contents_url.empty() && schema_contents_serialized.empty() && schema_contents_sha256.empty()))
     {
       string url_contents;
       auto get_response = getCachedRequestData(curl, schema_contents_url, schema_contents_sha256, schema_contents_serialized, cache_base_dir);
@@ -487,31 +566,20 @@ namespace duckdb
       msgpack::object_handle oh = msgpack::unpack((const char *)decompressed_url_contents->data(), decompressed_length, 0);
       std::vector<std::string> unpacked_data = oh.get().as<std::vector<std::string>>();
 
-      for(auto item : unpacked_data) {
+      for (auto item : unpacked_data)
+      {
         AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto flight_info, arrow::flight::FlightInfo::Deserialize(item), credentials.location, "");
 
-        AirportAPITable table{
-            .location = credentials.location,
-            .flight_info = std::move(flight_info)};
-
         // Look in api_metadata for each flight and determine if it should be a table.
-        auto app_metadata = table.flight_info->app_metadata();
-        if (!app_metadata.empty())
+        auto app_metadata = flight_info->app_metadata();
+        if (app_metadata.empty())
         {
-          ParseFlightAppMetadata(table, catalog, schema);
+          continue;
         }
-        if (table.catalog_name == catalog && table.schema_name == schema)
-        {
-          result.emplace_back(table);
-        }
-        else
-        {
-          // TODO:
-          // May want to emit a warning here, where either the catalog or schema name doesn't
-          // match the location.
-        }
+        handle_flight_app_metadata(app_metadata, catalog, schema, credentials.location, std::move(flight_info), found_tables, found_functions);
       }
-      return result;
+
+      return std::make_pair(found_tables, found_functions);
     }
     else
     {
@@ -543,27 +611,16 @@ namespace duckdb
 
         // Look in api_metadata for each flight and determine if it should be a table.
         auto app_metadata = table.flight_info->app_metadata();
-
-        if (!app_metadata.empty())
+        if (app_metadata.empty())
         {
-          ParseFlightAppMetadata(table, catalog, schema);
+          continue;
         }
-
-        if (table.catalog_name == catalog && table.schema_name == schema)
-        {
-          result.emplace_back(table);
-        }
-        else
-        {
-          // TODO:
-          // May want to emit a warning if the catalog_name or schema name
-          // don't match.
-        }
+        handle_flight_app_metadata(app_metadata, catalog, schema, credentials.location, table.flight_info, found_tables, found_functions);
 
         AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(flight_info, listing->Next(), credentials.location, "");
       }
 
-      return result;
+      return std::make_pair(found_tables, found_functions);
     }
   }
 
@@ -587,8 +644,8 @@ namespace duckdb
 
   struct SerializedContents
   {
-    std::string url;
-    std::string sha256;
+    std::optional<std::string> url;
+    std::optional<std::string> sha256;
     std::optional<std::string> serialized;
     MSGPACK_DEFINE_MAP(url, sha256, serialized);
   };
@@ -674,8 +731,9 @@ namespace duckdb
       throw InvalidInputException("File to parse MsgPack object describing catalog root %s", e.what());
     }
 
-    result->schema_collection_contents_url = catalog_root.contents.url;
-    result->contents_sha256 = catalog_root.contents.sha256;
+    result->schema_collection_contents_url = catalog_root.contents.url ? catalog_root.contents.url.value() : "";
+    result->contents_sha256 = catalog_root.contents.sha256 ? catalog_root.contents.sha256.value() : "";
+    result->contents_serialized = catalog_root.contents.serialized ? catalog_root.contents.serialized.value() : "";
 
     for (auto &schema : catalog_root.schemas)
     {
@@ -684,16 +742,9 @@ namespace duckdb
       schema_result.catalog_name = catalog;
       schema_result.comment = schema.description;
       schema_result.tags = schema.tags;
-      schema_result.contents_url = schema.contents.url;
-      schema_result.contents_sha256 = schema.contents.sha256;
-      if (schema.contents.serialized)
-      {
-        schema_result.contents_serialized = schema.contents.serialized.value();
-      }
-      else
-      {
-        schema_result.contents_serialized = "";
-      }
+      schema_result.contents_url = schema.contents.url ? schema.contents.url.value() : "";
+      schema_result.contents_sha256 = schema.contents.sha256 ? schema.contents.sha256.value() : "";
+      schema_result.contents_serialized = schema.contents.serialized ? schema.contents.serialized.value() : "";
       result->schemas.emplace_back(schema_result);
     }
 

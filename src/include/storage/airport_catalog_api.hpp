@@ -20,6 +20,19 @@ namespace duckdb
     string comment;
   };
 
+  struct AirportAPIScalarFunction
+  {
+    string catalog_name;
+    string schema_name;
+    string name;
+
+    string comment;
+
+    string location;
+    std::shared_ptr<arrow::flight::FlightInfo> flight_info;
+    std::shared_ptr<arrow::Schema> input_schema;
+  };
+
   struct AirportAPISchema
   {
     string schema_name;
@@ -51,20 +64,19 @@ namespace duckdb
   {
   public:
     static vector<string> GetCatalogs(const string &catalog, AirportCredentials credentials);
-    static vector<AirportAPITable> GetTables(CURL *curl,
-                                             const string &catalog,
-                                             const string &schema,
-                                             const string &schema_contents_url,
-                                             const string &schema_contents_sha256,
-                                             const string &schema_contents_serialized,
-                                             const string &cache_base_dir,
-                                             AirportCredentials credentials);
+    static std::pair<vector<AirportAPITable>, vector<AirportAPIScalarFunction>> GetSchemaItems(CURL *curl,
+                                                                                               const string &catalog,
+                                                                                               const string &schema,
+                                                                                               const string &schema_contents_url,
+                                                                                               const string &schema_contents_sha256,
+                                                                                               const string &schema_contents_serialized,
+                                                                                               const string &cache_base_dir,
+                                                                                               AirportCredentials credentials);
     static unique_ptr<AirportSchemaCollection> GetSchemas(const string &catalog, AirportCredentials credentials);
 
     static void PopulateCatalogSchemaCacheFromURLorContent(CURL *curl,
-                                       const AirportSchemaCollection &collection,
-                                       const string &catalog_name,
-                                       const string &baseDir);
-
+                                                           const AirportSchemaCollection &collection,
+                                                           const string &catalog_name,
+                                                           const string &baseDir);
   };
 } // namespace duckdb

@@ -170,8 +170,9 @@ namespace duckdb
     D_ASSERT(send_types.size() > 0);
 
     ArrowSchema send_schema;
+    auto client_properties = context.GetClientProperties();
     ArrowConverter::ToArrowSchema(&send_schema, insert_global_state->send_types, send_names,
-                                  context.GetClientProperties());
+                                  client_properties);
 
     D_ASSERT(table != nullptr);
 
@@ -268,7 +269,9 @@ namespace duckdb
     // So there is some confusion about which columns are at a particular index.
     OnConflictHandling(*gstate.table, context, gstate, ustate, ustate.returning_data_chunk);
 
-    auto appender = make_uniq<ArrowAppender>(gstate.send_types, ustate.returning_data_chunk.size(), context.client.GetClientProperties());
+    auto appender = make_uniq<ArrowAppender>(gstate.send_types, ustate.returning_data_chunk.size(), context.client.GetClientProperties(),
+                                             ArrowTypeExtensionData::GetExtensionTypes(
+                                                 context.client, gstate.send_types));
     appender->Append(ustate.returning_data_chunk, 0, ustate.returning_data_chunk.size(), ustate.returning_data_chunk.size());
     ArrowArray arr = appender->Finalize();
 

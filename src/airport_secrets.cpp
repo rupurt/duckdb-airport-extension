@@ -33,7 +33,7 @@ namespace duckdb
     return secret_manager.LookupSecret(transaction, path, "airport");
   }
 
-  string AirportAuthTokenForLocation(ClientContext &context, string &server_location, const string &secret_name, const string &auth_token)
+  string AirportAuthTokenForLocation(ClientContext &context, const string &server_location, const string &secret_name, const string &auth_token)
   {
     if (!auth_token.empty())
     {

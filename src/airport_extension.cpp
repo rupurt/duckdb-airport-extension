@@ -12,6 +12,7 @@
 #include "storage/airport_transaction_manager.hpp"
 #include "airport_secrets.hpp"
 #include "airport_optimizer.hpp"
+#include "airport_scalar_function.hpp"
 #include <curl/curl.h>
 
 namespace duckdb

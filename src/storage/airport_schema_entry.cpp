@@ -15,7 +15,7 @@ namespace duckdb
 {
 
   AirportSchemaEntry::AirportSchemaEntry(Catalog &catalog, CreateSchemaInfo &info, AirportCurlPool &connection_pool, const string &cache_directory)
-      : SchemaCatalogEntry(catalog, info), tables(connection_pool, *this, cache_directory)
+      : SchemaCatalogEntry(catalog, info), tables(connection_pool, *this, cache_directory), functions(connection_pool, *this, cache_directory)
   {
   }
 
@@ -143,9 +143,8 @@ namespace duckdb
   {
     switch (type)
     {
-    // case CatalogType::INDEX_ENTRY:
+    case CatalogType::SCALAR_FUNCTION_ENTRY:
     case CatalogType::TABLE_ENTRY:
-      // case CatalogType::VIEW_ENTRY:
       return true;
     default:
       return false;
@@ -159,6 +158,7 @@ namespace duckdb
     {
       return;
     }
+
     GetCatalogSet(type).Scan(context, callback);
   }
   void AirportSchemaEntry::Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback)
@@ -186,8 +186,12 @@ namespace duckdb
     switch (type)
     {
     case CatalogType::TABLE_ENTRY:
-//    case CatalogType::VIEW_ENTRY:
+    case CatalogType::VIEW_ENTRY:
       return tables;
+    case CatalogType::AGGREGATE_FUNCTION_ENTRY:
+    case CatalogType::SCALAR_FUNCTION_ENTRY:
+    case CatalogType::MACRO_ENTRY:
+      return functions;
     default:
       string error_message = "Type not supported for GetCatalogSet: " + CatalogTypeToString(type);
       throw InternalException(error_message);

@@ -53,12 +53,12 @@ namespace duckdb
 
   optional_ptr<CatalogEntry> AirportCatalogSet::CreateEntry(unique_ptr<CatalogEntry> entry)
   {
-    //    lock_guard<mutex> l(entry_lock);
     auto result = entry.get();
     if (result->name.empty())
     {
       throw InternalException("AirportCatalogSet::CreateEntry called with empty name");
     }
+    //    printf("Creating catalog entry\n");
     entries.insert(make_pair(result->name, std::move(entry)));
     return result;
   }

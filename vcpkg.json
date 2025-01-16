@@ -1,11 +1,8 @@
 {
   "dependencies": [
-     {
+    {
       "name": "msgpack",
       "default-features": true
-    },
-    {
-      "name": "boost-variant"
     },
     {
       "name": "curl",

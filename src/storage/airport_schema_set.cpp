@@ -59,6 +59,7 @@ namespace duckdb
     {
       return;
     }
+    //    printf("Calling LoadEntries on AirportSchemaSet, catalog basically\n");
 
     auto &airport_catalog = catalog.Cast<AirportCatalog>();
     string cache_path = DuckDBHomeDirectory(context);
@@ -112,6 +113,7 @@ namespace duckdb
       // Since these are DuckDB attributes, we need to copy them manually.
       schema_entry->comment = schema.comment;
       schema_entry->tags = schema.tags;
+      // printf("Creating schema %s\n", schema.schema_name.c_str());
       CreateEntry(std::move(schema_entry));
     }
 

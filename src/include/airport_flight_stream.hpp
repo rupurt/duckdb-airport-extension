@@ -27,13 +27,31 @@ namespace duckdb
     AirportTakeFlightScanData(
         const string &flight_server_location,
         std::shared_ptr<flight::FlightInfo> flight_info,
-        std::shared_ptr<flight::FlightStreamReader> stream) : flight_server_location_(flight_server_location), flight_info_(flight_info), stream_(stream), progress_(0) {}
+        std::shared_ptr<flight::FlightStreamReader> stream) : flight_server_location_(flight_server_location), flight_info_(flight_info), stream_(stream), progress_(0)
+    {
+      total_records_ = flight_info->total_records();
+      flight_descriptor_ = flight_info->descriptor();
+    }
+
+    const flight::FlightDescriptor &flight_descriptor()
+    {
+      return flight_descriptor_;
+    }
+
+    const int64_t total_records()
+    {
+      return total_records_;
+    }
 
     string flight_server_location_;
     std::shared_ptr<flight::FlightInfo> flight_info_;
     std::shared_ptr<arrow::flight::FlightStreamReader> stream_;
     double progress_;
     string last_app_metadata_;
+
+  private:
+    int64_t total_records_;
+    flight::FlightDescriptor flight_descriptor_;
   };
 
   struct AirportTakeFlightBindData : public ArrowScanFunctionData

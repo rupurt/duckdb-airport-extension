@@ -112,8 +112,9 @@ namespace duckdb
     delete_global_state->send_types = {airport_table.GetRowIdType()};
     vector<string> send_names = {"row_id"};
     ArrowSchema send_schema;
+    auto client_properties = context.GetClientProperties();
     ArrowConverter::ToArrowSchema(&send_schema, delete_global_state->send_types, send_names,
-                                  context.GetClientProperties());
+                                  client_properties);
 
     vector<string> returning_column_names;
     for (auto &cd : table.GetColumns().Logical())
@@ -155,7 +156,9 @@ namespace duckdb
     small_chunk.data[0].Reference(chunk.data[row_id_index]);
     small_chunk.SetCardinality(chunk.size());
 
-    auto appender = make_uniq<ArrowAppender>(gstate.send_types, small_chunk.size(), context.client.GetClientProperties());
+    auto appender = make_uniq<ArrowAppender>(gstate.send_types, small_chunk.size(), context.client.GetClientProperties(),
+                                             ArrowTypeExtensionData::GetExtensionTypes(
+                                                 context.client, gstate.send_types));
     appender->Append(small_chunk, 0, small_chunk.size(), small_chunk.size());
     ArrowArray arr = appender->Finalize();
 
