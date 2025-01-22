@@ -63,7 +63,7 @@ namespace std
 namespace duckdb
 {
 
-  AirportFunctionSet::AirportFunctionSet(AirportCurlPool &connection_pool, AirportSchemaEntry &schema, const string &cache_directory_) : AirportInSchemaSet(schema), connection_pool(connection_pool), cache_directory(cache_directory_)
+  AirportScalarFunctionSet::AirportScalarFunctionSet(AirportCurlPool &connection_pool, AirportSchemaEntry &schema, const string &cache_directory_) : AirportInSchemaSet(schema), connection_pool(connection_pool), cache_directory(cache_directory_)
   {
   }
 
@@ -459,7 +459,7 @@ namespace duckdb
     return return_types;
   }
 
-  void AirportFunctionSet::LoadEntries(ClientContext &context)
+  void AirportScalarFunctionSet::LoadEntries(ClientContext &context)
   {
     // auto &transaction = AirportTransaction::Get(context, catalog);
 
@@ -479,7 +479,7 @@ namespace duckdb
 
     connection_pool.release(curl);
 
-    //    printf("AirportFunctionSet loading entries\n");
+    //    printf("AirportScalarFunctionSet loading entries\n");
     //    printf("Total functions: %lu\n", tables_and_functions.second.size());
 
     // There can be functions with the same name.
@@ -513,23 +513,20 @@ namespace duckdb
         D_ASSERT(output_types.size() == 1);
 
         // FIXME: deal with encoding the input and output types of the function.
-        auto foo = ScalarFunction(input_types, output_types[0],
-                                  AirportScalarFun,
-                                  nullptr,
-                                  nullptr,
-                                  nullptr,
-                                  AirportScalarFunInitLocalState,
-                                  LogicalTypeId::INVALID,
-                                  duckdb::FunctionStability::VOLATILE,
-                                  duckdb::FunctionNullHandling::DEFAULT_NULL_HANDLING,
-                                  nullptr);
-        // TODO: we need a bind function to create a flight client, and start the DoExchange call
-        // then stream the data across and read the results, but that will all be thread local.
-        // since it is assumed.
-        foo.function_info = make_uniq<AirportScalarFunctionInfo>(function.location, function.name, function.flight_info,
-                                                                 function.input_schema);
+        auto scalar_func = ScalarFunction(input_types, output_types[0],
+                                          AirportScalarFun,
+                                          nullptr,
+                                          nullptr,
+                                          nullptr,
+                                          AirportScalarFunInitLocalState,
+                                          LogicalTypeId::INVALID,
+                                          duckdb::FunctionStability::VOLATILE,
+                                          duckdb::FunctionNullHandling::DEFAULT_NULL_HANDLING,
+                                          nullptr);
+        scalar_func.function_info = make_uniq<AirportScalarFunctionInfo>(function.location, function.name, function.flight_info,
+                                                                         function.input_schema);
 
-        flight_func_set.AddFunction(foo);
+        flight_func_set.AddFunction(scalar_func);
       }
 
       CreateScalarFunctionInfo info = CreateScalarFunctionInfo(flight_func_set);
@@ -538,11 +535,6 @@ namespace duckdb
 
       auto function_entry = make_uniq_base<StandardEntry, ScalarFunctionCatalogEntry>(catalog, schema,
                                                                                       info.Cast<CreateScalarFunctionInfo>());
-      // printf("Adding function named %s\n", pair.first.name.c_str());
-
-      // Okay since we're getting called in LoadEntries in an AirportTableSet, this is putting this catalog
-      // entry in the list of tables rather that functions, which is causing a problem with the scanning
-      // of items.
       CreateEntry(std::move(function_entry));
     }
   }

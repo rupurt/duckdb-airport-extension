@@ -40,7 +40,7 @@ namespace duckdb
     static void AddColumn(ClientContext &context, AirportResult &result, AirportTableInfo &table_info, idx_t column_offset = 0);
   };
 
-  class AirportFunctionSet : public AirportInSchemaSet
+  class AirportScalarFunctionSet : public AirportInSchemaSet
   {
 
   protected:
@@ -51,8 +51,8 @@ namespace duckdb
     string cache_directory;
 
   public:
-    explicit AirportFunctionSet(AirportCurlPool &connection_pool, AirportSchemaEntry &schema, const string &cache_directory);
-    ~AirportFunctionSet() {}
+    explicit AirportScalarFunctionSet(AirportCurlPool &connection_pool, AirportSchemaEntry &schema, const string &cache_directory);
+    ~AirportScalarFunctionSet() {}
   };
 
 } // namespace duckdb
