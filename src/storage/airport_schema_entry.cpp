@@ -21,7 +21,7 @@ namespace duckdb
 {
 
   AirportSchemaEntry::AirportSchemaEntry(Catalog &catalog, CreateSchemaInfo &info, AirportCurlPool &connection_pool, const string &cache_directory)
-      : SchemaCatalogEntry(catalog, info), tables(connection_pool, *this, cache_directory), functions(connection_pool, *this, cache_directory)
+      : SchemaCatalogEntry(catalog, info), tables(connection_pool, *this, cache_directory), scalar_functions(connection_pool, *this, cache_directory)
   {
   }
 
@@ -203,10 +203,8 @@ namespace duckdb
     case CatalogType::TABLE_ENTRY:
     case CatalogType::VIEW_ENTRY:
       return tables;
-    case CatalogType::AGGREGATE_FUNCTION_ENTRY:
     case CatalogType::SCALAR_FUNCTION_ENTRY:
-    case CatalogType::MACRO_ENTRY:
-      return functions;
+      return scalar_functions;
     default:
       string error_message = "Type not supported for GetCatalogSet: " + CatalogTypeToString(type);
       throw InternalException(error_message);
