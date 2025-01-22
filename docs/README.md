@@ -2,7 +2,7 @@
 
 This extension "`airport`" enables the use of [Arrow Flight](https://arrow.apache.org/docs/format/Flight.html) with [DuckDB](https://duckdb.org).
 
-![Ducks waiting to take a flight at the airport](./duckdb-airport-1.jpg)
+![Ducks waiting to take a flight at the airport](https://github.com/user-attachments/assets/03b9fea6-171d-4b39-a2de-842860fef69b)
 
 ## What is Arrow Flight?
 
