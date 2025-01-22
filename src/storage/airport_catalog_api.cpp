@@ -97,7 +97,7 @@ namespace duckdb
 
   static std::unordered_map<std::string, std::unique_ptr<flight::FlightClient>> airport_flight_clients_by_location;
 
-  static std::unique_ptr<flight::FlightClient> &flightClientForLocation(const std::string &location)
+  std::unique_ptr<flight::FlightClient> &AirportAPI::FlightClientForLocation(const std::string &location)
   {
     auto it = airport_flight_clients_by_location.find(location);
     if (it != airport_flight_clients_by_location.end())
@@ -466,15 +466,13 @@ namespace duckdb
 
     if (parsed_app_metadata->type == "table")
     {
-      AirportAPITable table{
-          .location = location,
-          .flight_info = std::move(flight_info)};
-
-      table.catalog_name = parsed_app_metadata->catalog;
-      table.schema_name = parsed_app_metadata->schema;
-      table.name = parsed_app_metadata->name;
-      table.comment = parsed_app_metadata->comment;
-
+      AirportAPITable table(
+          location,
+          std::move(flight_info),
+          parsed_app_metadata->catalog,
+          parsed_app_metadata->schema,
+          parsed_app_metadata->name,
+          parsed_app_metadata->comment);
       found_tables.emplace_back(table);
     }
     else if (parsed_app_metadata->type == "scalar_function")
@@ -492,6 +490,7 @@ namespace duckdb
       {
         throw IOException("Function metadata does not have an input_schema defined for function " + function.schema_name + "." + function.name);
       }
+
       else
       {
         auto serialized_schema = parsed_app_metadata->input_schema.value();
@@ -596,26 +595,25 @@ namespace duckdb
         call_options.headers.emplace_back("authorization", ss.str());
       }
 
-      std::unique_ptr<flight::FlightClient> &flight_client = flightClientForLocation(credentials.location);
+      std::unique_ptr<flight::FlightClient> &flight_client = FlightClientForLocation(credentials.location);
 
       AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto listing, flight_client->ListFlights(call_options, {credentials.criteria}), credentials.location, "");
 
-      std::unique_ptr<flight::FlightInfo> flight_info;
+      std::shared_ptr<flight::FlightInfo> flight_info;
       AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(flight_info, listing->Next(), credentials.location, "");
 
       while (flight_info != nullptr)
       {
-        AirportAPITable table;
-        table.location = credentials.location;
-        table.flight_info = std::move(flight_info);
-
         // Look in api_metadata for each flight and determine if it should be a table.
-        auto app_metadata = table.flight_info->app_metadata();
+        auto app_metadata = flight_info->app_metadata();
         if (app_metadata.empty())
         {
           continue;
         }
-        handle_flight_app_metadata(app_metadata, catalog, schema, credentials.location, table.flight_info, found_tables, found_functions);
+        handle_flight_app_metadata(app_metadata, catalog, schema, credentials.location, flight_info, found_tables, found_functions);
+
+        // FIXME: there needs to be more code here to create the actual table.
+        // Rusty look into this.
 
         AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(flight_info, listing->Next(), credentials.location, "");
       }
@@ -689,7 +687,7 @@ namespace duckdb
     }
     call_options.headers.emplace_back("airport-action-name", "list_schemas");
 
-    std::unique_ptr<flight::FlightClient> &flight_client = flightClientForLocation(credentials.location);
+    std::unique_ptr<flight::FlightClient> &flight_client = FlightClientForLocation(credentials.location);
 
     arrow::flight::Action action{"list_schemas", arrow::Buffer::FromString(create_schema_request_document(catalog))};
     std::unique_ptr<arrow::flight::ResultStream> action_results;

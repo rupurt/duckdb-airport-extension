@@ -6,6 +6,8 @@
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "storage/airport_delete.hpp"
+#include "storage/airport_insert.hpp"
+#include "duckdb/planner/operator/logical_create_table.hpp"
 
 namespace duckdb
 {
@@ -25,6 +27,7 @@ namespace duckdb
 
   optional_idx AirportCatalog::GetCatalogVersion(ClientContext &context)
   {
+    // FIXME: may want to change this.
     // These catalogs generally don't change so just return 1 for now, if we were
     // creating dynamic tables or other changes this will have to change.
     //
@@ -106,7 +109,9 @@ namespace duckdb
   unique_ptr<PhysicalOperator> AirportCatalog::PlanCreateTableAs(ClientContext &context, LogicalCreateTable &op,
                                                                  unique_ptr<PhysicalOperator> plan)
   {
-    throw NotImplementedException("AirportCatalog PlanCreateTableAs");
+    auto insert = make_uniq<AirportInsert>(op, op.schema, std::move(op.info), false);
+    insert->children.push_back(std::move(plan));
+    return std::move(insert);
   }
 
   unique_ptr<LogicalOperator> AirportCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,

@@ -43,8 +43,8 @@ namespace duckdb
     auto airport_take_flight_function = airport_take_flight_function_set.functions.GetFunctionByArguments(context, {LogicalType::VARCHAR, LogicalType::POINTER});
 
     D_ASSERT(table_data);
-    D_ASSERT(table_data->flight_info);
-
+    D_ASSERT(table_data->flight_info != nullptr);
+    D_ASSERT(!table_data->location.empty());
 
     // Rusty: this is the place where the transformation happens between table functions and tables.
     vector<Value> inputs = {table_data->location, Value::POINTER((uintptr_t)&table_data->flight_info)};

@@ -20,6 +20,7 @@
 #include "duckdb.hpp"
 #include "airport_macros.hpp"
 #include <arrow/c/bridge.h>
+#include <arrow/util/key_value_metadata.h>
 #include "duckdb/function/table/arrow.hpp"
 #include "duckdb/common/arrow/schema_metadata.hpp"
 #include "storage/airport_curl_pool.hpp"
@@ -28,6 +29,8 @@
 #include "airport_headers.hpp"
 #include "airport_scalar_function.hpp"
 #include "yyjson.hpp"
+#include "duckdb/common/arrow/arrow_converter.hpp"
+#include <arrow/buffer.h>
 
 using namespace duckdb_yyjson; // NOLINT
 
@@ -294,7 +297,101 @@ namespace duckdb
 
   optional_ptr<CatalogEntry> AirportTableSet::CreateTable(ClientContext &context, BoundCreateTableInfo &info)
   {
-    throw NotImplementedException("AirportTableSet::CreateTable");
+    auto &airport_catalog = catalog.Cast<AirportCatalog>();
+    auto &base = info.base->Cast<CreateTableInfo>();
+
+    vector<LogicalType> column_types;
+    vector<string> column_names;
+    for (auto &col : base.columns.Logical())
+    {
+      column_types.push_back(col.GetType());
+      column_names.push_back(col.Name());
+    }
+
+    // To perform this creation we likely want to serialize the schema and send it to the server.
+    // so the table can be created as part of a DoAction call.
+
+    // So to convert all of the columns an arrow schema we need to look into the code for
+    // doing inserts.
+
+    ArrowSchema schema;
+    auto client_properties = context.GetClientProperties();
+
+    ArrowConverter::ToArrowSchema(&schema,
+                                  column_types,
+                                  column_names,
+                                  client_properties);
+
+    auto real_schema = arrow::ImportSchema(&schema).ValueOrDie();
+
+    std::shared_ptr<arrow::KeyValueMetadata> schema_metadata = std::make_shared<arrow::KeyValueMetadata>();
+
+    AIRPORT_ARROW_ASSERT_OK_LOCATION(schema_metadata->Set("table_name", base.table), airport_catalog.credentials.location, "");
+    AIRPORT_ARROW_ASSERT_OK_LOCATION(schema_metadata->Set("schema_name", base.schema), airport_catalog.credentials.location, "");
+    AIRPORT_ARROW_ASSERT_OK_LOCATION(schema_metadata->Set("catalog_name", base.catalog), airport_catalog.credentials.location, "");
+
+    real_schema = real_schema->WithMetadata(schema_metadata);
+
+    // Not make the call, need to include the schema name.
+
+    arrow::flight::FlightCallOptions call_options;
+
+    airport_add_standard_headers(call_options, airport_catalog.credentials.location);
+
+    if (!airport_catalog.credentials.auth_token.empty())
+    {
+      std::stringstream ss;
+      ss << "Bearer " << airport_catalog.credentials.auth_token;
+      call_options.headers.emplace_back("authorization", ss.str());
+    }
+    call_options.headers.emplace_back("airport-action-name", "create_table");
+
+    std::unique_ptr<flight::FlightClient> &flight_client = AirportAPI::FlightClientForLocation(airport_catalog.credentials.location);
+
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(
+        auto serialized_schema,
+        arrow::ipc::SerializeSchema(*real_schema, arrow::default_memory_pool()),
+        airport_catalog.credentials.location,
+        "");
+
+    arrow::flight::Action action{"create_table",
+                                 serialized_schema};
+    std::unique_ptr<arrow::flight::ResultStream> action_results;
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(action_results, flight_client->DoAction(call_options, action), airport_catalog.credentials.location, "airport_create_table");
+
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto flight_info_buffer, action_results->Next(), airport_catalog.credentials.location, "");
+
+    if (flight_info_buffer == nullptr)
+    {
+      throw InternalException("No flight info returned from create_table action");
+    }
+
+    std::string_view serialized_flight_info(reinterpret_cast<const char *>(flight_info_buffer->body->data()), flight_info_buffer->body->size());
+
+    // Now how to we deserialize the flight info from that buffer...
+    std::shared_ptr<flight::FlightInfo> flight_info;
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(flight_info, arrow::flight::FlightInfo::Deserialize(serialized_flight_info), airport_catalog.credentials.location, "");
+
+    // We aren't interested in anything after the first result.
+    AIRPORT_ARROW_ASSERT_OK_LOCATION(action_results->Drain(), airport_catalog.credentials.location, "");
+
+    // The result is a catalog entry, so we're going to need to create that if the
+    // action succeeded.
+
+    auto table_entry = make_uniq<AirportTableEntry>(catalog, this->schema, base, LogicalType::BIGINT);
+    AirportAPITable new_table(
+        airport_catalog.credentials.location,
+        flight_info,
+        base.catalog,
+        base.schema,
+        base.table,
+        string(""));
+
+    // Now how are we going to get the flight info, it could just be serialized as part of the action result.
+    new_table.flight_info = std::move(flight_info);
+    table_entry->table_data = make_uniq<AirportAPITable>(new_table);
+
+    return CreateEntry(std::move(table_entry));
   }
 
   void AirportTableSet::AlterTable(ClientContext &context, RenameTableInfo &info)

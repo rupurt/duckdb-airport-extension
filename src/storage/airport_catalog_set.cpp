@@ -2,6 +2,11 @@
 #include "storage/airport_transaction.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "storage/airport_schema_entry.hpp"
+#include "airport_headers.hpp"
+#include "storage/airport_catalog.hpp"
+#include "airport_macros.hpp"
+#include <arrow/buffer.h>
+#include <msgpack.hpp>
 
 namespace duckdb
 {
@@ -26,9 +31,95 @@ namespace duckdb
     return entry->second.get();
   }
 
+  struct DropTableAction
+  {
+    std::string schema_name;
+    std::string table_name;
+
+    // Define how to serialize/deserialize the structure using MessagePack
+    MSGPACK_DEFINE(schema_name, table_name);
+  };
+
   void AirportCatalogSet::DropEntry(ClientContext &context, DropInfo &info)
   {
-    throw NotImplementedException("AirportCatalogSet::DropEntry");
+    // printf("AirportCatalogSet::DropEntry\n");
+    // printf("Dropping entry: %s\n", info.ToString().c_str());
+    // printf("Name: %s\n", info.name.c_str());
+    // printf("Schema: %s\n", info.schema.c_str());
+
+    if (!is_loaded)
+    {
+      is_loaded = true;
+      LoadEntries(context);
+    }
+
+    auto &airport_catalog = catalog.Cast<AirportCatalog>();
+
+    arrow::flight::FlightCallOptions call_options;
+
+    airport_add_standard_headers(call_options, airport_catalog.credentials.location);
+
+    if (!airport_catalog.credentials.auth_token.empty())
+    {
+      std::stringstream ss;
+      ss << "Bearer " << airport_catalog.credentials.auth_token;
+      call_options.headers.emplace_back("authorization", ss.str());
+    }
+
+    std::unique_ptr<arrow::flight::FlightClient> &flight_client = AirportAPI::FlightClientForLocation(airport_catalog.credentials.location);
+
+    switch (info.type)
+    {
+    case CatalogType::TABLE_ENTRY:
+    {
+      auto schema_entry = entries.find(info.name);
+      if (schema_entry == entries.end())
+      {
+        throw InvalidInputException("Table %s is not found", info.schema);
+      }
+
+      call_options.headers.emplace_back("airport-action-name", "drop_table");
+
+      DropTableAction drop_table_action = {info.schema, info.name};
+      std::stringstream packed_buffer;
+      msgpack::pack(packed_buffer, drop_table_action);
+      arrow::flight::Action action{"drop_table",
+                                   arrow::Buffer::FromString(packed_buffer.str())};
+
+      std::unique_ptr<arrow::flight::ResultStream> action_results;
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(action_results, flight_client->DoAction(call_options, action), airport_catalog.credentials.location, "airport_create_schema");
+
+      // We aren't interested in anything from this call.
+      AIRPORT_ARROW_ASSERT_OK_LOCATION(action_results->Drain(), airport_catalog.credentials.location, "");
+
+      entries.erase(info.name);
+    }
+    break;
+    case CatalogType::SCHEMA_ENTRY:
+    {
+      call_options.headers.emplace_back("airport-action-name", "drop_schema");
+      auto entry = entries.find(info.name);
+      if (entry == entries.end())
+      {
+        throw InvalidInputException("Schema %s is not found", info.name);
+      }
+
+      arrow::flight::Action action{"drop_schema",
+                                   arrow::Buffer::FromString(info.name)};
+      std::unique_ptr<arrow::flight::ResultStream> action_results;
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(action_results, flight_client->DoAction(call_options, action), airport_catalog.credentials.location, "airport_create_schema");
+
+      // We aren't interested in anything from this call.
+      AIRPORT_ARROW_ASSERT_OK_LOCATION(action_results->Drain(), airport_catalog.credentials.location, "");
+
+      entries.erase(info.name);
+    }
+    break;
+      //      throw NotImplementedException("AirportCatalogSet::DropEntry for schema");
+      //      break;
+    default:
+      throw NotImplementedException("AirportCatalogSet::DropEntry for type");
+    }
   }
 
   void AirportCatalogSet::EraseEntryInternal(const string &name)

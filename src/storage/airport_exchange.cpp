@@ -79,6 +79,8 @@ namespace duckdb
 
     auto auth_token = AirportAuthTokenForLocation(context, airport_table.table_data->location, "", "");
 
+    D_ASSERT(airport_table.table_data != nullptr);
+
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto flight_location, flight::Location::Parse(airport_table.table_data->location),
                                                        airport_table.table_data->location,
                                                        global_state->flight_descriptor, "");

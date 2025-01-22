@@ -5,7 +5,7 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "airport_extension.hpp"
-
+#include "duckdb/execution/operator/persistent/physical_insert.hpp"
 #include "duckdb/common/arrow/schema_metadata.hpp"
 #include "duckdb/common/arrow/arrow_converter.hpp"
 #include "duckdb/common/arrow/arrow_appender.hpp"
@@ -36,17 +36,22 @@ namespace duckdb
                                bool return_chunk,
                                vector<unique_ptr<Expression>> bound_defaults,
                                vector<unique_ptr<BoundConstraint>> bound_constraints_p)
-      : PhysicalOperator(PhysicalOperatorType::EXTENSION, op.types, 1), table(&table), schema(nullptr),
-        column_index_map(std::move(column_index_map_p)), return_chunk(return_chunk),
-        bound_defaults(std::move(bound_defaults)), bound_constraints(std::move(bound_constraints_p))
+      : PhysicalOperator(PhysicalOperatorType::EXTENSION, op.types, 1), insert_table(&table),
+        insert_types(table.GetTypes()),
+        schema(nullptr),
+        column_index_map(std::move(column_index_map_p)),
+        return_chunk(return_chunk),
+        bound_defaults(std::move(bound_defaults)),
+        bound_constraints(std::move(bound_constraints_p))
   {
   }
 
-  AirportInsert::AirportInsert(LogicalOperator &op, SchemaCatalogEntry &schema, unique_ptr<BoundCreateTableInfo> info,
-                               bool return_chunk)
-      : PhysicalOperator(PhysicalOperatorType::EXTENSION, op.types, 1), table(nullptr), schema(&schema),
-        info(std::move(info)), return_chunk(return_chunk)
+  AirportInsert::AirportInsert(LogicalOperator &op, SchemaCatalogEntry &schema, unique_ptr<BoundCreateTableInfo> info_p,
+                               idx_t estimated_cardinality)
+      : PhysicalOperator(PhysicalOperatorType::CREATE_TABLE_AS, op.types, estimated_cardinality), insert_table(nullptr), schema(&schema),
+        info(std::move(info_p)), return_chunk(false)
   {
+    PhysicalInsert::GetInsertInfo(*info, insert_types, bound_defaults);
   }
 
   //===--------------------------------------------------------------------===//
@@ -82,12 +87,13 @@ namespace duckdb
   {
   public:
     AirportInsertLocalState(ClientContext &context,
-                            const TableCatalogEntry &table,
+                            const vector<LogicalType> &types,
+                            //                            const TableCatalogEntry &table,
                             const vector<unique_ptr<Expression>> &bound_defaults,
                             const vector<unique_ptr<BoundConstraint>> &bound_constraints)
         : default_executor(context, bound_defaults), bound_constraints(bound_constraints)
     {
-      returning_data_chunk.Initialize(Allocator::Get(context), table.GetTypes());
+      returning_data_chunk.Initialize(Allocator::Get(context), types);
     }
 
     ConstraintState &GetConstraintState(TableCatalogEntry &table, TableCatalogEntry &tableref);
@@ -141,23 +147,26 @@ namespace duckdb
 
   unique_ptr<GlobalSinkState> AirportInsert::GetGlobalSinkState(ClientContext &context) const
   {
-    AirportTableEntry *insert_table;
-    if (!table)
+    optional_ptr<AirportTableEntry> table;
+    //    AirportTableEntry *insert_table;
+    if (info)
     {
+      // Create table as
+      D_ASSERT(!insert_table);
       auto &schema_ref = *schema.get_mutable();
-      insert_table =
-          &schema_ref.CreateTable(schema_ref.GetCatalogTransaction(context), *info)->Cast<AirportTableEntry>();
+      table = &schema_ref.CreateTable(schema_ref.GetCatalogTransaction(context), *info)->Cast<AirportTableEntry>();
     }
     else
     {
-      insert_table = &table.get_mutable()->Cast<AirportTableEntry>();
+      D_ASSERT(insert_table);
+      table = &insert_table.get_mutable()->Cast<AirportTableEntry>();
     }
 
-    auto insert_global_state = make_uniq<AirportInsertGlobalState>(context, insert_table, GetTypes(), return_chunk);
+    auto insert_global_state = make_uniq<AirportInsertGlobalState>(context, table.get(), GetTypes(), return_chunk);
 
     // auto &transaction = AirportTransaction::Get(context, insert_table->catalog);
     // auto &connection = transaction.GetConnection();
-    auto [send_names, send_types] = AirportGetInsertColumns(*this, *insert_table);
+    auto [send_names, send_types] = AirportGetInsertColumns(*this, *table);
 
     insert_global_state->send_types = send_types;
     insert_global_state->send_names = send_names;
@@ -182,7 +191,7 @@ namespace duckdb
       returning_column_names.push_back(cd.GetName());
     }
 
-    AirportExchangeGetGlobalSinkState(context, *table.get(), *insert_table, insert_global_state.get(),
+    AirportExchangeGetGlobalSinkState(context, *table.get(), *table, insert_global_state.get(),
                                       send_schema, return_chunk, "insert",
                                       returning_column_names);
 
@@ -192,7 +201,7 @@ namespace duckdb
   unique_ptr<LocalSinkState> AirportInsert::GetLocalSinkState(ExecutionContext &context) const
   {
     return make_uniq<AirportInsertLocalState>(context.client,
-                                              *table.get(),
+                                              insert_types,
                                               bound_defaults,
                                               bound_constraints);
   }
@@ -428,13 +437,13 @@ namespace duckdb
   //===--------------------------------------------------------------------===//
   string AirportInsert::GetName() const
   {
-    return table ? "AIRPORT_INSERT" : "AIRPORT_CREATE_TABLE_AS";
+    return info ? "AIRPORT_INSERT" : "AIRPORT_CREATE_TABLE_AS";
   }
 
   InsertionOrderPreservingMap<string> AirportInsert::ParamsToString() const
   {
     InsertionOrderPreservingMap<string> result;
-    result["Table Name"] = table ? table->name : info->Base().table;
+    result["Table Name"] = !info ? insert_table->name : info->Base().table;
     return result;
   }
 

@@ -137,7 +137,7 @@ namespace duckdb
     return value; // Return the original value if no gRPC context is found
   }
 
-  static string build_error_message(const string &location, const string &descriptor, const string msg, const string &status)
+  static string build_error_message(const string &location, const string &descriptor, const string &msg, const string &status)
   {
     // Handle other descriptor types if needed
     string descriptor_joiner = "/";

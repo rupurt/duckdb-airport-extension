@@ -18,6 +18,20 @@ namespace duckdb
     string schema_name;
     string name;
     string comment;
+
+    AirportAPITable(
+        const std::string &location,
+        std::shared_ptr<arrow::flight::FlightInfo> flightInfo,
+        const std::string &catalog,
+        const std::string &schema,
+        const std::string &tableName,
+        const std::string &tableComment)
+        : location(location),
+          flight_info(flightInfo),
+          catalog_name(catalog),
+          schema_name(schema),
+          name(tableName),
+          comment(tableComment) {}
   };
 
   struct AirportAPIScalarFunction
@@ -78,5 +92,8 @@ namespace duckdb
                                                            const AirportSchemaCollection &collection,
                                                            const string &catalog_name,
                                                            const string &baseDir);
+
+    static std::unique_ptr<arrow::flight::FlightClient> &FlightClientForLocation(const std::string &location);
   };
+
 } // namespace duckdb

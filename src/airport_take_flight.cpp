@@ -137,6 +137,8 @@ namespace duckdb
     // Create a UID for tracing.
     auto trace_uuid = UUID::ToString(UUID::GenerateRandomUUID());
 
+    D_ASSERT(!take_flight_params.server_location.empty());
+
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto location, flight::Location::Parse(take_flight_params.server_location),
                                                        take_flight_params.server_location,
                                                        descriptor,

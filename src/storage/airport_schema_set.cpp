@@ -7,6 +7,10 @@
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/file_system.hpp"
 
+#include "airport_headers.hpp"
+#include "airport_macros.hpp"
+#include <arrow/buffer.h>
+
 namespace duckdb
 {
   // Set the connection pool size.
@@ -122,7 +126,40 @@ namespace duckdb
 
   optional_ptr<CatalogEntry> AirportSchemaSet::CreateSchema(ClientContext &context, CreateSchemaInfo &info)
   {
-    throw NotImplementedException("Schema creation");
+    auto &airport_catalog = catalog.Cast<AirportCatalog>();
+
+    arrow::flight::FlightCallOptions call_options;
+
+    airport_add_standard_headers(call_options, airport_catalog.credentials.location);
+
+    if (!airport_catalog.credentials.auth_token.empty())
+    {
+      std::stringstream ss;
+      ss << "Bearer " << airport_catalog.credentials.auth_token;
+      call_options.headers.emplace_back("authorization", ss.str());
+    }
+    call_options.headers.emplace_back("airport-action-name", "create_schema");
+
+    std::unique_ptr<arrow::flight::FlightClient> &flight_client = AirportAPI::FlightClientForLocation(airport_catalog.credentials.location);
+
+    arrow::flight::Action action{"create_schema",
+                                 arrow::Buffer::FromString(info.schema)};
+    std::unique_ptr<arrow::flight::ResultStream> action_results;
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(action_results, flight_client->DoAction(call_options, action), airport_catalog.credentials.location, "airport_create_schema");
+
+    // We aren't interested in anything from this call.
+    AIRPORT_ARROW_ASSERT_OK_LOCATION(action_results->Drain(), airport_catalog.credentials.location, "");
+
+    auto real_schema = make_uniq<AirportAPISchema>();
+    real_schema->catalog_name = catalog.GetName();
+    real_schema->schema_name = info.schema;
+    string cache_path = DuckDBHomeDirectory(context);
+
+    auto schema_entry = make_uniq<AirportSchemaEntry>(catalog, info, connection_pool, cache_path);
+
+    schema_entry->schema_data = std::move(real_schema);
+
+    return CreateEntry(std::move(schema_entry));
   }
 
 } // namespace duckdb

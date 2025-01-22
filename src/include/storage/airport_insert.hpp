@@ -21,10 +21,18 @@ namespace duckdb
                   vector<unique_ptr<BoundConstraint>> bound_constraints);
 
     //! CREATE TABLE AS
-    AirportInsert(LogicalOperator &op, SchemaCatalogEntry &schema, unique_ptr<BoundCreateTableInfo> info, bool return_chunk);
+    AirportInsert(LogicalOperator &op, SchemaCatalogEntry &schema, unique_ptr<BoundCreateTableInfo> info, idx_t estimated_cardinality);
+
+    static void GetInsertInfo(const BoundCreateTableInfo &info, vector<LogicalType> &insert_types,
+                              vector<unique_ptr<Expression>> &bound_defaults);
 
     //! The table to insert into
-    optional_ptr<TableCatalogEntry> table;
+    optional_ptr<TableCatalogEntry> insert_table;
+    // optional_ptr<TableCatalogEntry> table;
+
+    //! The insert types
+    vector<LogicalType> insert_types;
+
     //! Table schema, in case of CREATE TABLE AS
     optional_ptr<SchemaCatalogEntry> schema;
     //! Create table info, in case of CREATE TABLE AS

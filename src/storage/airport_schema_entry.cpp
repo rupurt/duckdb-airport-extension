@@ -11,6 +11,12 @@
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "storage/airport_curl_pool.hpp"
+#include "airport_headers.hpp"
+#include "storage/airport_catalog.hpp"
+#include "airport_macros.hpp"
+#include <arrow/buffer.h>
+#include <msgpack.hpp>
+
 namespace duckdb
 {
 
@@ -168,7 +174,16 @@ namespace duckdb
 
   void AirportSchemaEntry::DropEntry(ClientContext &context, DropInfo &info)
   {
-    GetCatalogSet(info.type).DropEntry(context, info);
+    switch (info.type)
+    {
+    case CatalogType::TABLE_ENTRY:
+    {
+      tables.DropEntry(context, info);
+      break;
+    }
+    default:
+      throw NotImplementedException("AirportSchemaEntry::DropEntry for type");
+    }
   }
 
   optional_ptr<CatalogEntry> AirportSchemaEntry::GetEntry(CatalogTransaction transaction, CatalogType type,
