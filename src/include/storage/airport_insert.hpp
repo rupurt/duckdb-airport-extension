@@ -23,9 +23,6 @@ namespace duckdb
     //! CREATE TABLE AS
     AirportInsert(LogicalOperator &op, SchemaCatalogEntry &schema, unique_ptr<BoundCreateTableInfo> info, idx_t estimated_cardinality);
 
-    static void GetInsertInfo(const BoundCreateTableInfo &info, vector<LogicalType> &insert_types,
-                              vector<unique_ptr<Expression>> &bound_defaults);
-
     //! The table to insert into
     optional_ptr<TableCatalogEntry> insert_table;
     // optional_ptr<TableCatalogEntry> table;
