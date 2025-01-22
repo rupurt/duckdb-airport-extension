@@ -79,7 +79,7 @@ namespace duckdb
 
     // TODO: handle out-of-order columns using position property
     auto curl = connection_pool.acquire();
-    auto tables_and_functions = AirportAPI::GetSchemaItems(
+    auto contents = AirportAPI::GetSchemaItems(
         curl,
         catalog.GetDBPath(),
         schema.name,
@@ -93,7 +93,7 @@ namespace duckdb
     //    printf("AirportTableSet loading entries\n");
     //    printf("Total tables: %lu\n", tables_and_functions.first.size());
 
-    for (auto &table : tables_and_functions.first)
+    for (auto &table : contents->tables)
     {
       // D_ASSERT(schema.name == table.schema_name);
       CreateTableInfo info;
@@ -467,7 +467,7 @@ namespace duckdb
 
     // TODO: handle out-of-order columns using position property
     auto curl = connection_pool.acquire();
-    auto tables_and_functions = AirportAPI::GetSchemaItems(
+    auto contents = AirportAPI::GetSchemaItems(
         curl,
         catalog.GetDBPath(),
         schema.name,
@@ -485,7 +485,7 @@ namespace duckdb
     // There can be functions with the same name.
     std::unordered_map<FunctionCatalogSchemaName, std::vector<AirportAPIScalarFunction>> scalar_functions_by_name;
 
-    for (auto &function : tables_and_functions.second)
+    for (auto &function : contents->scalar_functions)
     {
       FunctionCatalogSchemaName function_key{function.catalog_name, function.schema_name, function.name};
       scalar_functions_by_name[function_key].emplace_back(function);

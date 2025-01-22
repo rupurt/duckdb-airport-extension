@@ -455,8 +455,7 @@ namespace duckdb
                                   const string &target_schema,
                                   const string &location,
                                   const std::shared_ptr<arrow::flight::FlightInfo> &flight_info,
-                                  vector<AirportAPITable> &found_tables,
-                                  vector<AirportAPIScalarFunction> &found_functions)
+                                  unique_ptr<AirportSchemaContents> &contents)
   {
     auto parsed_app_metadata = ParseFlightAppMetadata(app_metadata);
     if (!(parsed_app_metadata->catalog == target_catalog && parsed_app_metadata->schema == target_schema))
@@ -473,7 +472,7 @@ namespace duckdb
           parsed_app_metadata->schema,
           parsed_app_metadata->name,
           parsed_app_metadata->comment);
-      found_tables.emplace_back(table);
+      contents->tables.emplace_back(table);
     }
     else if (parsed_app_metadata->type == "scalar_function")
     {
@@ -509,7 +508,7 @@ namespace duckdb
         function.input_schema = parameter_schema;
       }
 
-      found_functions.emplace_back(function);
+      contents->scalar_functions.emplace_back(function);
     }
     else
     {
@@ -517,7 +516,8 @@ namespace duckdb
     }
   }
 
-  std::pair<vector<AirportAPITable>, vector<AirportAPIScalarFunction>>
+  //  std::pair<vector<AirportAPITable>, vector<AirportAPIScalarFunction>>
+  unique_ptr<AirportSchemaContents>
   AirportAPI::GetSchemaItems(CURL *curl,
                              const string &catalog,
                              const string &schema,
@@ -527,8 +527,7 @@ namespace duckdb
                              const string &cache_base_dir,
                              AirportCredentials credentials)
   {
-    vector<AirportAPITable> found_tables;
-    vector<AirportAPIScalarFunction> found_functions;
+    auto contents = make_uniq<AirportSchemaContents>();
 
     if (!(schema_contents_url.empty() && schema_contents_serialized.empty() && schema_contents_sha256.empty()))
     {
@@ -575,10 +574,10 @@ namespace duckdb
         {
           continue;
         }
-        handle_flight_app_metadata(app_metadata, catalog, schema, credentials.location, std::move(flight_info), found_tables, found_functions);
+        handle_flight_app_metadata(app_metadata, catalog, schema, credentials.location, std::move(flight_info), contents);
       }
 
-      return std::make_pair(found_tables, found_functions);
+      return contents;
     }
     else
     {
@@ -610,7 +609,7 @@ namespace duckdb
         {
           continue;
         }
-        handle_flight_app_metadata(app_metadata, catalog, schema, credentials.location, flight_info, found_tables, found_functions);
+        handle_flight_app_metadata(app_metadata, catalog, schema, credentials.location, flight_info, contents);
 
         // FIXME: there needs to be more code here to create the actual table.
         // Rusty look into this.
@@ -618,7 +617,7 @@ namespace duckdb
         AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(flight_info, listing->Next(), credentials.location, "");
       }
 
-      return std::make_pair(found_tables, found_functions);
+      return contents;
     }
   }
 

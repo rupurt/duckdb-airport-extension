@@ -74,18 +74,26 @@ namespace duckdb
     vector<AirportAPISchema> schemas;
   };
 
+  // A collection of parsed items from a schema's metadata.
+  struct AirportSchemaContents
+  {
+  public:
+    vector<AirportAPITable> tables;
+    vector<AirportAPIScalarFunction> scalar_functions;
+  };
+
   class AirportAPI
   {
   public:
     static vector<string> GetCatalogs(const string &catalog, AirportCredentials credentials);
-    static std::pair<vector<AirportAPITable>, vector<AirportAPIScalarFunction>> GetSchemaItems(CURL *curl,
-                                                                                               const string &catalog,
-                                                                                               const string &schema,
-                                                                                               const string &schema_contents_url,
-                                                                                               const string &schema_contents_sha256,
-                                                                                               const string &schema_contents_serialized,
-                                                                                               const string &cache_base_dir,
-                                                                                               AirportCredentials credentials);
+    static unique_ptr<AirportSchemaContents> GetSchemaItems(CURL *curl,
+                                                            const string &catalog,
+                                                            const string &schema,
+                                                            const string &schema_contents_url,
+                                                            const string &schema_contents_sha256,
+                                                            const string &schema_contents_serialized,
+                                                            const string &cache_base_dir,
+                                                            AirportCredentials credentials);
     static unique_ptr<AirportSchemaCollection> GetSchemas(const string &catalog, AirportCredentials credentials);
 
     static void PopulateCatalogSchemaCacheFromURLorContent(CURL *curl,
