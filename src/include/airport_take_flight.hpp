@@ -39,7 +39,7 @@ namespace duckdb
     std::string schema_name;
     std::string action_name;
     std::string parameters;
-    MSGPACK_DEFINE_MAP(schema_name, action_name, parameters);
+    MSGPACK_DEFINE_MAP(schema_name, action_name, parameters)
   };
 
   unique_ptr<FunctionData> AirportTakeFlightBindWithFlightDescriptor(
