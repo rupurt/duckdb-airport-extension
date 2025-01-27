@@ -25,6 +25,8 @@ namespace duckdb
     // Override the ticket supplied from GetFlightInfo.
     // this is supplied via a named parameter.
     string ticket;
+
+    std::unordered_map<string, std::vector<string>> user_supplied_headers;
   };
 
   AirportTakeFlightParameters AirportParseTakeFlightParameters(
