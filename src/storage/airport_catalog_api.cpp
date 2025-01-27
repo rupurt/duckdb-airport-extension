@@ -435,7 +435,7 @@ namespace duckdb
     // This is the function description for table or scalar functions.
     std::optional<string> description;
 
-    MSGPACK_DEFINE_MAP(type, schema, catalog, name, comment, input_schema, action_name, description);
+    MSGPACK_DEFINE_MAP(type, schema, catalog, name, comment, input_schema, action_name, description)
   };
 
   static std::unique_ptr<SerializedFlightAppMetadata> ParseFlightAppMetadata(const string &app_metadata)
@@ -680,7 +680,7 @@ namespace duckdb
     std::optional<std::string> url;
     std::optional<std::string> sha256;
     std::optional<std::string> serialized;
-    MSGPACK_DEFINE_MAP(url, sha256, serialized);
+    MSGPACK_DEFINE_MAP(url, sha256, serialized)
   };
 
   struct SerializedSchema
@@ -690,7 +690,7 @@ namespace duckdb
     std::unordered_map<std::string, std::string> tags;
     SerializedContents contents;
 
-    MSGPACK_DEFINE_MAP(schema, description, tags, contents);
+    MSGPACK_DEFINE_MAP(schema, description, tags, contents)
   };
 
   struct SerializedCatalogRoot
@@ -698,7 +698,7 @@ namespace duckdb
     SerializedContents contents;
     std::vector<SerializedSchema> schemas;
 
-    MSGPACK_DEFINE_MAP(contents, schemas); // MessagePack mapping
+    MSGPACK_DEFINE_MAP(contents, schemas)
   };
 
   // This is not the schemas of the tables.
