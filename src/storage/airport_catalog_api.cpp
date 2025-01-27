@@ -480,15 +480,16 @@ namespace duckdb
     }
     else if (parsed_app_metadata->type == "table_function")
     {
-      AirportAPITableFunction function{
-          .location = location,
-          .flight_info = flight_info,
-          .catalog_name = parsed_app_metadata->catalog,
-          .schema_name = parsed_app_metadata->schema,
-          .name = parsed_app_metadata->name,
-          .comment = parsed_app_metadata->comment,
-          .action_name = parsed_app_metadata->action_name.value_or(""),
-          .description = parsed_app_metadata->description.value_or("")};
+      AirportAPITableFunction function;
+
+      function.location = location;
+      function.flight_info = std::move(flight_info);
+      function.catalog_name = parsed_app_metadata->catalog;
+      function.schema_name = parsed_app_metadata->schema;
+      function.name = parsed_app_metadata->name;
+      function.comment = parsed_app_metadata->comment;
+      function.action_name = parsed_app_metadata->action_name.value_or("");
+      function.description = parsed_app_metadata->description.value_or("");
 
       if (!parsed_app_metadata->input_schema.has_value())
       {
@@ -514,9 +515,9 @@ namespace duckdb
     }
     else if (parsed_app_metadata->type == "scalar_function")
     {
-      AirportAPIScalarFunction function{
-          .location = location,
-          .flight_info = std::move(flight_info)};
+      AirportAPIScalarFunction function;
+      function.location = location;
+      function.flight_info = std::move(flight_info);
 
       function.catalog_name = parsed_app_metadata->catalog;
       function.schema_name = parsed_app_metadata->schema;
