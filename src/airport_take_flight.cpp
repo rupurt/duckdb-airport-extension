@@ -112,6 +112,10 @@ namespace duckdb
       {
         params.secret_name = StringValue::Get(kv.second);
       }
+      else if (loption == "ticket")
+      {
+        params.ticket = StringValue::Get(kv.second);
+      }
     }
 
     params.auth_token = AirportAuthTokenForLocation(context, params.server_location, params.secret_name, params.auth_token);
@@ -163,8 +167,6 @@ namespace duckdb
       std::string joined_path_parts = join_vector_of_strings(path_parts, '/');
       call_options.headers.emplace_back("airport-flight-path", joined_path_parts);
     }
-
-    // FIXME: this may need to know if we need the row_id.
 
     // Get the information about the flight, this will allow the
     // endpoint information to be returned.
@@ -241,6 +243,7 @@ namespace duckdb
 
     ret->scan_data = std::move(scan_data);
     ret->flight_client = std::move(flight_client);
+    ret->ticket = take_flight_params.ticket;
     ret->auth_token = take_flight_params.auth_token;
     ret->server_location = take_flight_params.server_location;
     ret->trace_id = trace_uuid;
@@ -588,7 +591,12 @@ namespace duckdb
 
     auto server_ticket = bind_data.scan_data->flight_info_->endpoints()[0].ticket;
     auto server_ticket_contents = server_ticket.ticket;
-    if (server_ticket_contents.find("<TICKET_ALLOWS_METADATA>") == 0)
+
+    if (!bind_data.ticket.empty())
+    {
+      server_ticket = flight::Ticket{bind_data.ticket};
+    }
+    else if (server_ticket_contents.find("<TICKET_ALLOWS_METADATA>") == 0)
     {
       // This ticket allows metadata to be supplied in the ticket.
 
@@ -671,6 +679,7 @@ namespace duckdb
 
     take_flight_function_with_descriptor.named_parameters["auth_token"] = LogicalType::VARCHAR;
     take_flight_function_with_descriptor.named_parameters["secret"] = LogicalType::VARCHAR;
+    take_flight_function_with_descriptor.named_parameters["ticket"] = LogicalType::BLOB;
     take_flight_function_with_descriptor.pushdown_complex_filter = take_flight_complex_filter_pushdown;
 
     // Add support for optional named paraemters that would be appended to the descriptor

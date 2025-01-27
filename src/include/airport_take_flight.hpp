@@ -22,6 +22,9 @@ namespace duckdb
     string server_location;
     string auth_token;
     string secret_name;
+    // Override the ticket supplied from GetFlightInfo.
+    // this is supplied via a named parameter.
+    string ticket;
   };
 
   AirportTakeFlightParameters AirportParseTakeFlightParameters(
