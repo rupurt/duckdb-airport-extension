@@ -860,7 +860,7 @@ namespace duckdb
 
       if (!metadata.GetOption("is_table_input").empty())
       {
-        result.all.emplace_back(LogicalType::TABLE);
+        result.all.emplace_back(LogicalType(LogicalTypeId::TABLE));
       }
       else
       {
@@ -877,7 +877,7 @@ namespace duckdb
       {
         if (!metadata.GetOption("is_table_input").empty())
         {
-          result.positional.emplace_back(LogicalType::TABLE);
+          result.positional.emplace_back(LogicalType(LogicalTypeId::TABLE));
         }
         else
         {
@@ -1274,7 +1274,7 @@ namespace duckdb
 
         // Determine if we have a table input.
         bool has_table_input = false;
-        if (std::find(input_types.all.begin(), input_types.all.end(), LogicalType::TABLE) != input_types.all.end())
+        if (std::find(input_types.all.begin(), input_types.all.end(), LogicalType(LogicalTypeId::TABLE)) != input_types.all.end())
         {
           has_table_input = true;
         }
