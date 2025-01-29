@@ -893,8 +893,8 @@ namespace duckdb
   {
   };
 
-  static duckdb::unique_ptr<GlobalTableFunctionState>
-  AirportDynableTableInOutGlobalInit(ClientContext &context,
+  static unique_ptr<GlobalTableFunctionState>
+  AirportDynamicTableInOutGlobalInit(ClientContext &context,
                                      TableFunctionInitInput &input)
   {
     auto &bind_data = input.bind_data->Cast<AirportTakeFlightBindData>();
@@ -1114,7 +1114,9 @@ namespace duckdb
         global_state->scan_local_state.get(),
         global_state->scan_global_state.get());
 
-    return global_state;
+    unique_ptr<duckdb::GlobalTableFunctionState> base_wrapper = std::move(global_state);
+
+    return base_wrapper;
   }
 
   static OperatorResultType AirportTakeFlightInOut(ExecutionContext &context, TableFunctionInput &data_p, DataChunk &input,
@@ -1300,7 +1302,7 @@ namespace duckdb
               nullptr,
               // The bind function knows how to handle the in and out.
               AirportDynamicTableBind,
-              AirportDynableTableInOutGlobalInit,
+              AirportDynamicTableInOutGlobalInit,
               nullptr);
 
           table_func.in_out_function = AirportTakeFlightInOut;
