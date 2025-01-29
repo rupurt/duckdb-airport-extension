@@ -74,7 +74,13 @@ namespace duckdb
                                          string exchange_operation,
                                          vector<string> destination_chunk_column_names)
   {
-    global_state->schema = arrow::ImportSchema(&send_schema).ValueOrDie();
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
+        global_state->schema,
+        arrow::ImportSchema(&send_schema),
+        airport_table.table_data->location,
+        airport_table.table_data->flight_info->descriptor(),
+        "");
+
     global_state->flight_descriptor = airport_table.table_data->flight_info->descriptor();
 
     auto auth_token = AirportAuthTokenForLocation(context, airport_table.table_data->location, "", "");
@@ -139,7 +145,6 @@ namespace duckdb
     auto scan_data = make_uniq<AirportTakeFlightScanData>(
         airport_table.table_data->location,
         airport_table.table_data->flight_info,
-        //        std::move(flight_info),
         std::move(exchange_result.reader));
 
     auto scan_bind_data = make_uniq<AirportExchangeTakeFlightBindData>(

@@ -270,7 +270,7 @@ namespace duckdb
     ret->auth_token = take_flight_params.auth_token;
     ret->server_location = take_flight_params.server_location;
     ret->trace_id = trace_uuid;
-
+    ret->table_function_parameters = table_function_parameters;
     auto &data = *ret;
 
     // Convert the C++ schema into the C format schema, but store it on the bind

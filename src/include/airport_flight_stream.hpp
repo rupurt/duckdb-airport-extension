@@ -13,6 +13,7 @@
 #include "arrow/flight/client.h"
 
 #include "duckdb/function/table/arrow.hpp"
+#include "msgpack.hpp"
 
 namespace flight = arrow::flight;
 
@@ -27,7 +28,9 @@ namespace duckdb
     AirportTakeFlightScanData(
         const string &flight_server_location,
         std::shared_ptr<flight::FlightInfo> flight_info,
-        std::shared_ptr<flight::FlightStreamReader> stream) : flight_server_location_(flight_server_location), flight_info_(flight_info), stream_(stream), progress_(0)
+        std::shared_ptr<flight::FlightStreamReader> stream) : flight_server_location_(flight_server_location),
+                                                              flight_info_(flight_info),
+                                                              stream_(stream), progress_(0)
     {
       total_records_ = flight_info->total_records();
       flight_descriptor_ = flight_info->descriptor();
@@ -52,6 +55,16 @@ namespace duckdb
   private:
     int64_t total_records_;
     flight::FlightDescriptor flight_descriptor_;
+  };
+
+  struct GetFlightInfoTableFunctionParameters
+  {
+    std::string schema_name;
+    std::string action_name;
+    std::string parameters;
+    std::string table_input_schema;
+
+    MSGPACK_DEFINE_MAP(schema_name, action_name, parameters, table_input_schema)
   };
 
   struct AirportTakeFlightBindData : public ArrowScanFunctionData
@@ -89,6 +102,9 @@ namespace duckdb
     //
     // Its assumed that the work will be done in the LogicalUpdate or LogicalDelete
     bool skip_producing_result_for_update_or_delete = false;
+
+    // When doing a dynamic table functino we need this.
+    std::shared_ptr<GetFlightInfoTableFunctionParameters> table_function_parameters;
   };
 
   struct AirportFlightStreamReader : public arrow::RecordBatchReader

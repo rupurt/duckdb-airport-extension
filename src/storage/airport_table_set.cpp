@@ -27,6 +27,7 @@
 #include "duckdb/common/arrow/schema_metadata.hpp"
 #include "storage/airport_curl_pool.hpp"
 #include "airport_macros.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "airport_secrets.hpp"
 #include "airport_headers.hpp"
 #include "airport_scalar_function.hpp"
@@ -36,6 +37,8 @@
 #include "duckdb/common/arrow/arrow_appender.hpp"
 #include <arrow/buffer.h>
 #include <arrow/io/memory.h>
+#include "airport_flight_stream.hpp"
+#include "storage/airport_exchange.hpp"
 
 using namespace duckdb_yyjson; // NOLINT
 
@@ -68,6 +71,19 @@ namespace std
 namespace duckdb
 {
 
+  static std::string join_vector_of_strings(const std::vector<std::string> &vec, const char joiner)
+  {
+    if (vec.empty())
+      return "";
+
+    return std::accumulate(
+        std::next(vec.begin()), vec.end(), vec.front(),
+        [joiner](const std::string &a, const std::string &b)
+        {
+          return a + joiner + b;
+        });
+  }
+
   AirportTableFunctionSet::AirportTableFunctionSet(AirportCurlPool &connection_pool, AirportSchemaEntry &schema, const string &cache_directory_) : AirportInSchemaSet(schema), connection_pool(connection_pool), cache_directory(cache_directory_)
   {
   }
@@ -98,9 +114,6 @@ namespace duckdb
         cache_directory,
         airport_catalog.credentials);
     connection_pool.release(curl);
-
-    //    printf("AirportTableSet loading entries\n");
-    //    printf("Total tables: %lu\n", tables_and_functions.first.size());
 
     for (auto &table : contents->tables)
     {
@@ -331,7 +344,7 @@ namespace duckdb
                                   column_names,
                                   client_properties);
 
-    auto real_schema = arrow::ImportSchema(&schema).ValueOrDie();
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto real_schema, arrow::ImportSchema(&schema), airport_catalog.credentials.location, "");
 
     std::shared_ptr<arrow::KeyValueMetadata> schema_metadata = std::make_shared<arrow::KeyValueMetadata>();
 
@@ -580,35 +593,43 @@ namespace duckdb
     }
   };
 
-  static unique_ptr<FunctionData> AirportDynamicTableBind(
-      ClientContext &context,
-      TableFunctionBindInput &input,
-      vector<LogicalType> &return_types,
-      vector<string> &names)
+  // Create a new arrow schema where all is_table_fields are removed, since they will be
+  // serialized outside of the parameters.
+  static std::shared_ptr<arrow::Schema> AirportSchemaWithoutTableFields(std::shared_ptr<arrow::Schema> schema)
   {
-    auto function_info = input.info->Cast<AirportDynamicTableFunctionInfo>();
+    vector<std::shared_ptr<arrow::Field>> keep_fields;
+    for (const auto &field : schema->fields())
+    {
+      auto metadata = field->metadata();
 
-    auto server_location = input.inputs[0].ToString();
-    auto params = AirportParseTakeFlightParameters(function_info.function->location,
-                                                   context, input);
+      if (metadata == nullptr || !metadata->Contains("is_table_input"))
+      {
+        keep_fields.push_back(field);
+      }
+    }
 
-    // We are going to want these as an arrow appender row and record batch.
+    // Create a new schema with the remaining fields
+    return arrow::schema(keep_fields);
+  }
 
-    // If we're going to deal with nested types, we don't want to use a msgpack
-    // based solution here lets do an Arrow based solution.
-
-    // We need to convert the input schema into a schema that DuckDB can parse into logical types.
-
+  // Serialize data to a arrow::Buffer
+  static std::shared_ptr<arrow::Buffer> AirportDynamicSerializeParameters(std::shared_ptr<arrow::Schema> input_schema,
+                                                                          ClientContext &context,
+                                                                          TableFunctionBindInput &input,
+                                                                          string server_location,
+                                                                          arrow::flight::FlightDescriptor flight_descriptor)
+  {
     ArrowSchemaWrapper schema_root;
-    auto &input_schema = function_info.function->input_schema;
 
-    AIRPORT_ARROW_ASSERT_OK_LOCATION(
+    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(
         ExportSchema(*input_schema, &schema_root.arrow_schema),
-        function_info.function->location,
+        server_location,
+        flight_descriptor,
         "ExportSchema");
 
     vector<string> input_schema_names;
     vector<LogicalType> input_schema_types;
+    vector<idx_t> source_indexes;
 
     for (idx_t col_idx = 0;
          col_idx < (idx_t)schema_root.arrow_schema.n_children; col_idx++)
@@ -624,11 +645,26 @@ namespace duckdb
         name = string("v") + to_string(col_idx);
       }
 
-      input_schema_names.push_back(name);
+      // If we have a table input skip over it.
+      if (schema.metadata != nullptr)
+      {
+        auto column_metadata = ArrowSchemaMetadata(schema.metadata);
 
+        auto is_table_input = column_metadata.GetOption("is_table_input");
+        if (!is_table_input.empty())
+        {
+          source_indexes.push_back(-1);
+          continue;
+        }
+      }
+      input_schema_names.push_back(name);
       auto arrow_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), schema);
       input_schema_types.push_back(arrow_type->GetDuckType());
+      // Where does this field come from.
+      source_indexes.push_back(col_idx);
     }
+
+    // We need to produce a schema that doesn't contain the is_table_input fields.
 
     auto appender = make_uniq<ArrowAppender>(input_schema_types, input_schema_types.size(), context.GetClientProperties(),
                                              ArrowTypeExtensionData::GetExtensionTypes(context, input_schema_types));
@@ -654,6 +690,12 @@ namespace duckdb
       // So if the parameter is named, we'd get that off of the metadata
       // otherwise its positional.
       auto metadata = ArrowSchemaMetadata(schema.metadata);
+
+      if (!metadata.GetOption("is_table_input").empty())
+      {
+        continue;
+      }
+
       if (!metadata.GetOption("is_named_parameter").empty())
       {
         input_chunk.data[col_idx].SetValue(0, input.named_parameters[schema.name]);
@@ -663,7 +705,7 @@ namespace duckdb
       {
         // Since named parameters aren't passed in inputs, we need to adjust
         // the offset we're looking at.
-        auto &input_data = input.inputs[col_idx - seen_named_parameters];
+        auto &input_data = input.inputs[source_indexes[col_idx - seen_named_parameters]];
         input_chunk.data[col_idx].SetValue(0, input_data);
       }
     }
@@ -672,25 +714,54 @@ namespace duckdb
     appender->Append(input_chunk, 0, input_chunk.size(), input_chunk.size());
     ArrowArray arr = appender->Finalize();
 
+    auto schema_without_table_fields = AirportSchemaWithoutTableFields(input_schema);
+
     AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
         auto record_batch,
-        arrow::ImportRecordBatch(&arr, function_info.function->input_schema),
-        function_info.function->location,
-        function_info.function->flight_info->descriptor(), "");
+        arrow::ImportRecordBatch(&arr, schema_without_table_fields),
+        server_location,
+        flight_descriptor, "");
 
-    // Write the record batch to a sequence of bytes.
-    // Write RecordBatch to a sequence of bytes
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto buffer_output_stream,
+                                            arrow::io::BufferOutputStream::Create(),
+                                            server_location,
+                                            "create buffer output stream");
 
-    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto buffer_output_stream, arrow::io::BufferOutputStream::Create(), function_info.function->location, "create buffer output stream");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto writer,
+                                            arrow::ipc::MakeStreamWriter(buffer_output_stream, schema_without_table_fields),
+                                            server_location,
+                                            "make stream writer");
 
-    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(auto writer, arrow::ipc::MakeStreamWriter(buffer_output_stream, function_info.function->input_schema), function_info.function->location, "make stream writer");
+    AIRPORT_ARROW_ASSERT_OK_LOCATION(writer->WriteRecordBatch(*record_batch),
+                                     server_location,
+                                     "write record batch");
 
-    // Write the RecordBatch
-    AIRPORT_ARROW_ASSERT_OK_LOCATION(writer->WriteRecordBatch(*record_batch), function_info.function->location, "write record batch");
+    AIRPORT_ARROW_ASSERT_OK_LOCATION(writer->Close(),
+                                     server_location,
+                                     "close record batch writer");
 
-    AIRPORT_ARROW_ASSERT_OK_LOCATION(writer->Close(), function_info.function->location, "close record batch writer");
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION(
+        auto buffer,
+        buffer_output_stream->Finish(),
+        server_location,
+        "finish buffer output stream");
 
-    auto buffer = buffer_output_stream->Finish().ValueOrDie();
+    return buffer;
+  }
+
+  static unique_ptr<FunctionData> AirportDynamicTableBind(
+      ClientContext &context,
+      TableFunctionBindInput &input,
+      vector<LogicalType> &return_types,
+      vector<string> &names)
+  {
+    auto function_info = input.info->Cast<AirportDynamicTableFunctionInfo>();
+
+    auto buffer = AirportDynamicSerializeParameters(function_info.function->input_schema,
+                                                    context,
+                                                    input,
+                                                    function_info.function->location,
+                                                    function_info.function->flight_info->descriptor());
 
     // So save the buffer so we can send it to the server to determine
     // the schema of the flight.
@@ -700,6 +771,40 @@ namespace duckdb
     tf_params.parameters = string((char *)buffer->data(), buffer->size());
     tf_params.schema_name = function_info.function->schema_name;
     tf_params.action_name = function_info.function->action_name;
+
+    // If we are doing an table in_out function we need to serialize the schema of the input.
+
+    // So I think we need to build an ArrowConverter something to build a
+    if (input.table_function.in_out_function != nullptr)
+    {
+      ArrowSchema input_table_schema;
+      auto client_properties = context.GetClientProperties();
+
+      ArrowConverter::ToArrowSchema(&input_table_schema,
+                                    input.input_table_types,
+                                    input.input_table_names,
+                                    client_properties);
+
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto table_input_schema,
+                                                         arrow::ImportSchema(&input_table_schema),
+                                                         function_info.function->location,
+                                                         function_info.function->flight_info->descriptor(),
+                                                         "");
+
+      AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
+          auto serialized_schema,
+          arrow::ipc::SerializeSchema(*table_input_schema, arrow::default_memory_pool()),
+          function_info.function->location,
+          function_info.function->flight_info->descriptor(),
+          "");
+
+      std::string serialized_table_in_schema(reinterpret_cast<const char *>(serialized_schema->data()), serialized_schema->size());
+
+      tf_params.table_input_schema = serialized_table_in_schema;
+    }
+
+    auto params = AirportParseTakeFlightParameters(function_info.function->location,
+                                                   context, input);
 
     return AirportTakeFlightBindWithFlightDescriptor(
         params,
@@ -751,21 +856,378 @@ namespace duckdb
         arrow_type->SetDictionary(std::move(dictionary_type));
       }
 
-      result.all.emplace_back(arrow_type->GetDuckType());
+      auto metadata = ArrowSchemaMetadata(schema.metadata);
+
+      if (!metadata.GetOption("is_table_input").empty())
+      {
+        result.all.emplace_back(LogicalType::TABLE);
+      }
+      else
+      {
+        result.all.emplace_back(arrow_type->GetDuckType());
+      }
+
       result.all_names.emplace_back(string(schema.name));
 
-      auto metadata = ArrowSchemaMetadata(schema.metadata);
       if (!metadata.GetOption("is_named_parameter").empty())
       {
         result.named[schema.name] = arrow_type->GetDuckType();
       }
       else
       {
-        result.positional.emplace_back(arrow_type->GetDuckType());
+        if (!metadata.GetOption("is_table_input").empty())
+        {
+          result.positional.emplace_back(LogicalType::TABLE);
+        }
+        else
+        {
+          result.positional.emplace_back(arrow_type->GetDuckType());
+        }
         result.positional_names.push_back(string(schema.name));
       }
     }
     return result;
+  }
+
+  struct AirportDynamicTableInOutGlobalState : public GlobalTableFunctionState, public AirportExchangeGlobalState
+  {
+  };
+
+  static duckdb::unique_ptr<GlobalTableFunctionState>
+  AirportDynableTableInOutGlobalInit(ClientContext &context,
+                                     TableFunctionInitInput &input)
+  {
+    auto &bind_data = input.bind_data->Cast<AirportTakeFlightBindData>();
+
+    auto auth_token = AirportAuthTokenForLocation(context, bind_data.server_location, "", "");
+
+    auto trace_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+
+    arrow::flight::FlightCallOptions call_options;
+    airport_add_standard_headers(call_options, bind_data.server_location);
+
+    if (!auth_token.empty())
+    {
+      std::stringstream ss;
+      ss << "Bearer " << auth_token;
+      call_options.headers.emplace_back("authorization", ss.str());
+    }
+
+    call_options.headers.emplace_back("airport-trace-id", trace_uuid);
+
+    call_options.headers.emplace_back("airport-operation", "table_in_out_function");
+
+    D_ASSERT(bind_data.table_function_parameters != nullptr);
+    call_options.headers.emplace_back("airport-action-name", bind_data.table_function_parameters->action_name);
+
+    // Indicate if the caller is interested in data being returned.
+    call_options.headers.emplace_back("return-chunks", "1");
+
+    auto &flight_descriptor = bind_data.scan_data->flight_descriptor();
+
+    if (flight_descriptor.type == arrow::flight::FlightDescriptor::PATH)
+    {
+      auto path_parts = flight_descriptor.path;
+      std::string joined_path_parts = join_vector_of_strings(path_parts, '/');
+      call_options.headers.emplace_back("airport-flight-path", joined_path_parts);
+    }
+
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
+        auto exchange_result,
+        bind_data.flight_client->DoExchange(call_options, flight_descriptor),
+        bind_data.server_location,
+        flight_descriptor, "");
+
+    // We have the serialized schema that we sent the server earlier so deserialize so we can
+    // send it again.
+    std::shared_ptr<arrow::Buffer> serialized_schema_buffer = std::make_shared<arrow::Buffer>(
+        reinterpret_cast<const uint8_t *>(bind_data.table_function_parameters->table_input_schema.data()),
+        bind_data.table_function_parameters->table_input_schema.size());
+
+    auto buffer_reader = std::make_shared<arrow::io::BufferReader>(serialized_schema_buffer);
+
+    arrow::ipc::DictionaryMemo in_memo;
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
+        auto send_schema,
+        arrow::ipc::ReadSchema(buffer_reader.get(), &in_memo),
+        bind_data.server_location,
+        flight_descriptor, "ReadSchema");
+
+    // Tell the server the schema that we will be using to write data.
+    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(
+        exchange_result.writer->Begin(send_schema),
+        bind_data.server_location,
+        flight_descriptor,
+        "airport_dynamic_table_function: send schema");
+
+    // Send the input set of parameters to the server.
+    std::shared_ptr<arrow::Buffer> parameters_buffer = std::make_shared<arrow::Buffer>(
+        reinterpret_cast<const uint8_t *>(bind_data.table_function_parameters->parameters.data()),
+        bind_data.table_function_parameters->parameters.size());
+
+    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(
+        exchange_result.writer->WriteMetadata(parameters_buffer),
+        bind_data.server_location,
+        flight_descriptor,
+        "airport_dynamic_table_function: write metadata with parameters");
+
+    auto scan_data = make_uniq<AirportTakeFlightScanData>(
+        bind_data.server_location,
+        // This flight info will be correctly populated from the bind.
+        bind_data.scan_data->flight_info_,
+        std::move(exchange_result.reader));
+
+    auto scan_bind_data = make_uniq<AirportExchangeTakeFlightBindData>(
+        (stream_factory_produce_t)&AirportFlightStreamReader::CreateStream,
+        (uintptr_t)scan_data.get());
+
+    scan_bind_data->scan_data = std::move(scan_data);
+    //    scan_bind_data->flight_client = bind_data.flight_client;
+    scan_bind_data->server_location = bind_data.server_location;
+    scan_bind_data->trace_id = trace_uuid;
+
+    vector<column_t> column_ids;
+
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(auto read_schema,
+                                                       scan_bind_data->scan_data->stream_->GetSchema(),
+                                                       bind_data.server_location,
+                                                       flight_descriptor, "");
+
+    auto &data = *scan_bind_data;
+    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(
+        ExportSchema(*read_schema, &data.schema_root.arrow_schema),
+        bind_data.server_location,
+        flight_descriptor,
+        "ExportSchema");
+
+    vector<string> reading_arrow_column_names;
+    for (idx_t col_idx = 0;
+         col_idx < (idx_t)data.schema_root.arrow_schema.n_children; col_idx++)
+    {
+      auto &schema = *data.schema_root.arrow_schema.children[col_idx];
+      if (!schema.release)
+      {
+        throw InvalidInputException("airport_exchange: released schema passed");
+      }
+      auto name = string(schema.name);
+      if (name.empty())
+      {
+        name = string("v") + to_string(col_idx);
+      }
+
+      reading_arrow_column_names.push_back(name);
+    }
+
+    // printf("Arrow schema column names are: %s\n", join_vector_of_strings(reading_arrow_column_names, ',').c_str());
+    // printf("Expected order of columns to be: %s\n", join_vector_of_strings(destination_chunk_column_names, ',').c_str());
+
+    vector<string> arrow_types;
+    for (idx_t col_idx = 0;
+         col_idx < (idx_t)data.schema_root.arrow_schema.n_children; col_idx++)
+    {
+      auto &schema = *data.schema_root.arrow_schema.children[col_idx];
+      if (!schema.release)
+      {
+        throw InvalidInputException("airport_exchange: released schema passed");
+      }
+      auto arrow_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), schema);
+      arrow_types.push_back(arrow_type->GetDuckType().ToString());
+
+      // Determine if the column is the row_id column by looking at the metadata
+      // on the column.
+      bool is_row_id_column = false;
+      if (schema.metadata != nullptr)
+      {
+        auto column_metadata = ArrowSchemaMetadata(schema.metadata);
+
+        auto comment = column_metadata.GetOption("is_row_id");
+        if (!comment.empty())
+        {
+          is_row_id_column = true;
+          scan_bind_data->row_id_column_index = col_idx;
+        }
+      }
+
+      if (schema.dictionary)
+      {
+        auto dictionary_type = ArrowType::GetArrowLogicalType(DBConfig::GetConfig(context), *schema.dictionary);
+        arrow_type->SetDictionary(std::move(dictionary_type));
+      }
+
+      if (!is_row_id_column)
+      {
+        scan_bind_data->return_types.emplace_back(arrow_type->GetDuckType());
+      }
+
+      auto name = string(schema.name);
+
+      // printf("Setting arrow column index %llu to data %s\n", is_row_id_column ? COLUMN_IDENTIFIER_ROW_ID : col_idx, arrow_type->GetDuckType().ToString().c_str());
+      scan_bind_data->arrow_table.AddColumn(is_row_id_column ? COLUMN_IDENTIFIER_ROW_ID : col_idx, std::move(arrow_type));
+
+      auto format = string(schema.format);
+      if (name.empty())
+      {
+        name = string("v") + to_string(col_idx);
+      }
+
+      if (!is_row_id_column)
+      {
+        scan_bind_data->names.push_back(name);
+      }
+    }
+
+    // There shouldn't be any projection ids.
+    vector<idx_t> projection_ids;
+
+    auto scan_global_state = make_uniq<ArrowScanGlobalState>();
+    scan_global_state->stream = AirportProduceArrowScan(scan_bind_data->CastNoConst<ArrowScanFunctionData>(), column_ids, nullptr);
+    scan_global_state->max_threads = 1;
+
+    // Retain the global state.
+    unique_ptr<AirportDynamicTableInOutGlobalState> global_state = make_uniq<AirportDynamicTableInOutGlobalState>();
+
+    global_state->scan_global_state = std::move(scan_global_state);
+    global_state->schema = send_schema;
+
+    // Now simulate the init input.
+    auto fake_init_input = TableFunctionInitInput(
+        &scan_bind_data->Cast<FunctionData>(),
+        column_ids,
+        projection_ids,
+        nullptr);
+
+    // Local init.
+
+    auto current_chunk = make_uniq<ArrowArrayWrapper>();
+    auto scan_local_state = make_uniq<ArrowScanLocalState>(std::move(current_chunk), context);
+    scan_local_state->column_ids = fake_init_input.column_ids;
+    scan_local_state->filters = fake_init_input.filters.get();
+
+    global_state->scan_local_state = std::move(scan_local_state);
+
+    // Create a parameter is the commonly passed to the other functions.
+    global_state->scan_bind_data = std::move(scan_bind_data);
+    global_state->writer = std::move(exchange_result.writer);
+
+    global_state->scan_table_function_input = make_uniq<TableFunctionInput>(
+        global_state->scan_bind_data.get(),
+        global_state->scan_local_state.get(),
+        global_state->scan_global_state.get());
+
+    return global_state;
+  }
+
+  static OperatorResultType AirportTakeFlightInOut(ExecutionContext &context, TableFunctionInput &data_p, DataChunk &input,
+                                                   DataChunk &output)
+  {
+    auto &global_state = data_p.global_state->Cast<AirportDynamicTableInOutGlobalState>();
+
+    // We need to send data to the server.
+
+    auto appender = make_uniq<ArrowAppender>(
+        input.GetTypes(),
+        input.size(),
+        context.client.GetClientProperties(),
+        ArrowTypeExtensionData::GetExtensionTypes(
+            context.client, input.GetTypes()));
+
+    appender->Append(input, 0, input.size(), input.size());
+    ArrowArray arr = appender->Finalize();
+
+    AIRPORT_FLIGHT_ASSIGN_OR_RAISE_LOCATION_DESCRIPTOR(
+        auto record_batch,
+        arrow::ImportRecordBatch(&arr, global_state.schema),
+        global_state.scan_bind_data->server_location,
+        global_state.flight_descriptor, "airport_dynamic_table_function: import record batch");
+
+    // Now send it
+    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(
+        global_state.writer->WriteRecordBatch(*record_batch),
+        global_state.scan_bind_data->server_location,
+        global_state.flight_descriptor, "airport_dynamic_table_function: write record batch");
+
+    // The server could produce results, so we should read them.
+    //
+    // it would be nice to know if we should expect results or not.
+    // but that would require reading more of the stream than what we can
+    // do right now.
+    //
+    // Rusty: for now just produce a chunk for every chunk read.
+    output.Reset();
+    {
+      auto &data = global_state.scan_table_function_input->bind_data->CastNoConst<ArrowScanFunctionData>();
+      auto &state = global_state.scan_table_function_input->local_state->Cast<ArrowScanLocalState>();
+      auto &global_state2 = global_state.scan_table_function_input->global_state->Cast<ArrowScanGlobalState>();
+
+      auto current_chunk = global_state2.stream->GetNextChunk();
+      state.chunk = std::move(current_chunk);
+
+      auto output_size =
+          MinValue<idx_t>(STANDARD_VECTOR_SIZE, NumericCast<idx_t>(state.chunk->arrow_array.length) - state.chunk_offset);
+      output.SetCardinality(state.chunk->arrow_array.length);
+
+      data.lines_read += output_size;
+      ArrowTableFunction::ArrowToDuckDB(state,
+                                        // I'm not sure if arrow table will be defined
+                                        data.arrow_table.GetColumns(),
+                                        output,
+                                        data.lines_read - output_size,
+                                        false);
+      output.Verify();
+    }
+
+    return OperatorResultType::NEED_MORE_INPUT;
+  }
+
+  static OperatorFinalizeResultType AirportTakeFlightInOutFinalize(ExecutionContext &context, TableFunctionInput &data_p,
+                                                                   DataChunk &output)
+  {
+    auto &global_state = data_p.global_state->Cast<AirportDynamicTableInOutGlobalState>();
+
+    AIRPORT_ARROW_ASSERT_OK_LOCATION_DESCRIPTOR(
+        global_state.writer->DoneWriting(),
+        global_state.scan_bind_data->server_location,
+        global_state.flight_descriptor, "airport_dynamic_table_function: finalize done writing");
+
+    bool is_finished = false;
+    {
+      auto &scan_data = global_state.scan_table_function_input;
+      auto &data = scan_data->bind_data->CastNoConst<ArrowScanFunctionData>();
+      auto &state = scan_data->local_state->Cast<ArrowScanLocalState>();
+      auto &global_state2 = scan_data->global_state->Cast<ArrowScanGlobalState>();
+
+      auto current_chunk = global_state2.stream->GetNextChunk();
+      state.chunk = std::move(current_chunk);
+
+      auto &last_app_metadata = global_state.scan_bind_data->scan_data->last_app_metadata_;
+      if (last_app_metadata == "finished")
+      {
+        is_finished = true;
+      }
+
+      auto output_size =
+          MinValue<idx_t>(STANDARD_VECTOR_SIZE, NumericCast<idx_t>(state.chunk->arrow_array.length) - state.chunk_offset);
+      output.SetCardinality(state.chunk->arrow_array.length);
+
+      data.lines_read += output_size;
+      if (output_size > 0)
+      {
+        ArrowTableFunction::ArrowToDuckDB(state,
+                                          // I'm not sure if arrow table will be defined
+                                          data.arrow_table.GetColumns(),
+                                          output,
+                                          data.lines_read - output_size,
+                                          false);
+      }
+      output.Verify();
+    }
+
+    if (is_finished)
+    {
+      return OperatorFinalizeResultType::FINISHED;
+    }
+    // there may be more data.
+    return OperatorFinalizeResultType::HAVE_MORE_OUTPUT;
   }
 
   void AirportTableFunctionSet::LoadEntries(ClientContext &context)
@@ -808,18 +1270,42 @@ namespace duckdb
         // flight function.
         auto input_types = AirportSchemaToLogicalTypesWithNaming(context, function.input_schema, function.location, function.flight_info->descriptor());
 
+        // Determine if we have a table input.
+        bool has_table_input = false;
+        if (std::find(input_types.all.begin(), input_types.all.end(), LogicalType::TABLE) != input_types.all.end())
+        {
+          has_table_input = true;
+        }
+
         FunctionDescription description;
         description.parameter_types = input_types.positional;
         description.parameter_names = input_types.positional_names;
         description.description = function.description;
         function_descriptions.push_back(std::move(description));
 
-        auto table_func = TableFunction(
-            input_types.positional,
-            AirportTakeFlight,
-            AirportDynamicTableBind,
-            AirportArrowScanInitGlobal,
-            ArrowTableFunction::ArrowScanInitLocal);
+        TableFunction table_func;
+        if (!has_table_input)
+        {
+          table_func = TableFunction(
+              input_types.positional,
+              AirportTakeFlight,
+              AirportDynamicTableBind,
+              AirportArrowScanInitGlobal,
+              ArrowTableFunction::ArrowScanInitLocal);
+        }
+        else
+        {
+          table_func = TableFunction(
+              input_types.all,
+              nullptr,
+              // The bind function knows how to handle the in and out.
+              AirportDynamicTableBind,
+              AirportDynableTableInOutGlobalInit,
+              nullptr);
+
+          table_func.in_out_function = AirportTakeFlightInOut;
+          table_func.in_out_function_final = AirportTakeFlightInOutFinalize;
+        }
 
         // Add all of t
         for (auto &named_pair : input_types.named)

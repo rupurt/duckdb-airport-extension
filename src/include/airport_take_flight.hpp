@@ -4,6 +4,7 @@
 #include "duckdb.hpp"
 
 #include "duckdb/function/table/arrow.hpp"
+#include "airport_flight_stream.hpp"
 #include <msgpack.hpp>
 
 namespace duckdb
@@ -34,14 +35,6 @@ namespace duckdb
       ClientContext &context,
       TableFunctionBindInput &input);
 
-  struct GetFlightInfoTableFunctionParameters
-  {
-    std::string schema_name;
-    std::string action_name;
-    std::string parameters;
-    MSGPACK_DEFINE_MAP(schema_name, action_name, parameters)
-  };
-
   unique_ptr<FunctionData> AirportTakeFlightBindWithFlightDescriptor(
       const AirportTakeFlightParameters &take_flight_params,
       const arrow::flight::FlightDescriptor &descriptor,
@@ -50,6 +43,6 @@ namespace duckdb
       vector<LogicalType> &return_types,
       vector<string> &names,
       std::shared_ptr<arrow::flight::FlightInfo> *cached_info_ptr,
-      std::shared_ptr<GetFlightInfoTableFunctionParameters> table_function_parameters);
+      std::shared_ptr<struct GetFlightInfoTableFunctionParameters> table_function_parameters);
 
 }
